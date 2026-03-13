@@ -41,10 +41,6 @@ def select_next_speaker(
     if not eligible:
         return None
 
-    hinted_speaker = _as_str(target_character_hint)
-    if hinted_speaker and any(item.character_id == hinted_speaker for item in eligible):
-        return hinted_speaker
-
     if len(eligible) == 1:
         return eligible[0].character_id
 

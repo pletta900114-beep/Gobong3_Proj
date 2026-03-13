@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from mellow_chat_runtime import app_state
 from mellow_chat_runtime.core.domain_lookup_store import get_domain_store
 from mellow_chat_runtime.core.rp_parser import ParsedSceneEvent, parse_scene_event
+from mellow_chat_runtime.core.speaker_relevance import build_speaker_relevance
 from mellow_chat_runtime.core.speaker_selector import SpeakerParticipant, select_next_speaker
 from mellow_chat_runtime.core.states import SystemState, TransitionResult
 from mellow_chat_runtime.core.text_sanitizer import sanitize_assistant_text, sanitize_history_text
@@ -161,13 +162,6 @@ def _list_known_characters(domain_store: Any) -> List[Dict[str, Any]]:
     user_characters = list(domain_store.list_section('user_characters').values())
     bot_characters = list(domain_store.list_section('bot_characters').values())
     return [item for item in user_characters + bot_characters if isinstance(item, dict)]
-
-
-def _build_speaker_relevance(parsed_scene_event: ParsedSceneEvent) -> Dict[str, float]:
-    if parsed_scene_event.target_character_hint:
-        return {parsed_scene_event.target_character_hint: 2.0}
-    return {}
-
 
 @router.get('/chat/sessions')
 async def get_chat_sessions(x_user: Optional[str] = Header(default=None), db: Session = Depends(get_db)):
@@ -317,7 +311,11 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
     domain_store = get_domain_store(data_path=app_state.settings.domain_data_file if app_state.settings else None)
     known_characters = _list_known_characters(domain_store)
     parsed_scene_event = parse_scene_event(request.question, known_characters)
-    speaker_relevance = _build_speaker_relevance(parsed_scene_event)
+    speaker_relevance = build_speaker_relevance(
+        parsed_scene_event=parsed_scene_event,
+        characters=known_characters,
+        scene_state=domain_store.get_scene_state(request.scene_id),
+    )
 
     active_character_ids = _compact_unique(
         requested_character_ids
@@ -403,12 +401,6 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
         'scene_id': request.scene_id,
         'world_id': request.world_id,
         'lore_keys': lore_keys,
-        'rp': {
-            'input_mode': parsed_scene_event.input_mode,
-            'target_character_hint': parsed_scene_event.target_character_hint,
-            'has_narration': parsed_scene_event.has_narration,
-            'has_dialogue': parsed_scene_event.has_dialogue,
-        },
     }
     logger.info(
         'chat.ask.start request_id=%s session_id=%s user=%s selected_model=%s selected_speaker=%s stream=%s input_mode=%s target_hint=%s',

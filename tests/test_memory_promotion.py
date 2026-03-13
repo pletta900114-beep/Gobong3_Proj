@@ -16,6 +16,7 @@ from mellow_chat_runtime.core.agent_brain import AgentResult
 from mellow_chat_runtime.core.domain_lookup_dispatcher import DomainLookupDispatcher
 from mellow_chat_runtime.core.orchestrator import Orchestrator
 from mellow_chat_runtime.core.rp_parser import parse_scene_event
+from mellow_chat_runtime.core.speaker_relevance import build_speaker_relevance
 from mellow_chat_runtime.core.speaker_selector import SpeakerParticipant, select_next_speaker
 from mellow_chat_runtime.core.states import TransitionResult
 from mellow_chat_runtime.core.text_sanitizer import sanitize_assistant_text
@@ -717,7 +718,7 @@ def test_chat_ask_non_stream_rp_output_and_target_selection(tmp_path: Path) -> N
     body = response.json()
     assert body['speaker_id'] == 'bot_char_02'
     assert '"그래. 지금은 거짓 없이 말하고 있어."' in body['response']
-    assert body['used_context']['rp']['input_mode'] == 'mixed'
+    assert 'rp' not in body['used_context']
 
 
 def test_chat_ask_stream_rp_output_success(tmp_path: Path) -> None:
@@ -805,3 +806,64 @@ def test_chat_ask_repairs_invalid_first_output_into_rp(tmp_path: Path) -> None:
     assert '"그래. 지금은 그렇게 말할 수 있어."' in body['response']
     assert '요청하신 대로' not in body['response']
     assert len(llm.chat_calls) >= 2
+
+
+
+def test_build_speaker_relevance_direct_mention_conflict_prefers_dialogue_target(tmp_path: Path) -> None:
+    _reset_domain_store()
+    domain_file = tmp_path / 'domain_data.json'
+    store = domain_lookup_store_module.get_domain_store(data_path=domain_file)
+    characters = list(store.list_section('bot_characters').values())
+    parsed = parse_scene_event(
+        '나는 어벤츄린 쪽으로 몸을 기울였지만 시선은 선데이에게 옮겼다.\n"선데이, 네 생각은?"',
+        characters,
+    )
+    relevance = build_speaker_relevance(parsed, characters, scene_state=store.get_scene_state('scene_default'))
+    assert relevance['bot_char_02'] > relevance.get('bot_char_01', 0.0)
+
+    selected = select_next_speaker(
+        participants=[
+            SpeakerParticipant(character_id='bot_char_01', is_major=True),
+            SpeakerParticipant(character_id='bot_char_02', is_major=False),
+        ],
+        recent_speaker_history=['bot_char_01'],
+        dialogue_priority={'major_weight': 1.0, 'minor_weight': 0.5, 'recency_penalty': 0.4, 'max_consecutive_turns': 1},
+        scene_rules={},
+        target_character_hint=parsed.target_character_hint,
+        speaker_relevance=relevance,
+    )
+    assert selected == 'bot_char_02'
+
+
+def test_build_speaker_relevance_false_relevance_guard(tmp_path: Path) -> None:
+    _reset_domain_store()
+    domain_file = tmp_path / 'domain_data.json'
+    store = domain_lookup_store_module.get_domain_store(data_path=domain_file)
+    characters = list(store.list_section('bot_characters').values())
+    parsed = parse_scene_event('어벤츄린 때와는 다르게 이번엔 조용히 정리하고 싶어.', characters)
+    relevance = build_speaker_relevance(parsed, characters, scene_state=store.get_scene_state('scene_default'))
+    assert relevance == {}
+
+
+def test_chat_ask_hides_rp_used_context_by_default(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_text='선데이는 짧게 숨을 고른다.\n\n"네 생각을 듣고 있어."')
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 천천히 고개를 들고 선데이를 바라봤다.\n"선데이, 네 생각은?"',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_ids': ['bot_char_01', 'bot_char_02'],
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    assert 'rp' not in response.json()['used_context']

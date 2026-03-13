@@ -107,11 +107,14 @@ def build_user_prompt(
         world_facts = []
     world_facts = [str(item).strip() for item in world_facts if str(item).strip()][:5]
     relationship_summary = []
-    for item in relationships[:4]:
-        target_id = item.get('target_id', 'unknown')
-        summary = item.get('summary', '')
-        tone = item.get('tone', 'neutral')
-        relationship_summary.append(f'{target_id}: {summary} (tone={tone})')
+    for item in relationships[:2]:
+        summary = str(item.get('summary', '')).strip()
+        tone = str(item.get('tone', 'neutral')).strip() or 'neutral'
+        boundaries = item.get('boundaries', [])
+        if not isinstance(boundaries, list):
+            boundaries = []
+        boundary = ', '.join(str(boundary).strip() for boundary in boundaries[:1] if str(boundary).strip()) or 'none'
+        relationship_summary.append(f'tone={tone}; boundary={boundary}; summary={summary}')
 
     if history:
         recent = history[-6:]

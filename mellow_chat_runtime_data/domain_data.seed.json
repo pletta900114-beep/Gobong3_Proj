@@ -30,7 +30,11 @@
       "relationship_keys": [
         "crew_main"
       ],
-      "is_major": true
+      "is_major": true,
+      "aliases": [
+        "멜로우",
+        "mellow"
+      ]
     }
   },
   "bot_characters": {
@@ -48,7 +52,11 @@
       "relationship_keys": [
         "crew_main"
       ],
-      "is_major": true
+      "is_major": true,
+      "aliases": [
+        "어벤츄린",
+        "aventurine"
+      ]
     },
     "bot_char_02": {
       "id": "bot_char_02",
@@ -62,7 +70,11 @@
       "relationship_keys": [
         "crew_support"
       ],
-      "is_major": false
+      "is_major": false,
+      "aliases": [
+        "선데이",
+        "sunday"
+      ]
     }
   },
   "lorebook": {

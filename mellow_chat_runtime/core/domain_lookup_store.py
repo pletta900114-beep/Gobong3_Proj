@@ -81,6 +81,7 @@ class JsonDomainLookupStore(DomainLookupStore):
                     "id": "user_char_01",
                     "type": "user",
                     "name": "Mellow",
+                    "aliases": ["멜로우", "mellow"],
                     "profile": "UI/UX designer and programmer",
                     "traits": ["design-driven", "character immersion"],
                     "relationship_keys": ["crew_main"],
@@ -92,6 +93,7 @@ class JsonDomainLookupStore(DomainLookupStore):
                     "id": "bot_char_01",
                     "type": "bot",
                     "name": "Aventurine",
+                    "aliases": ["어벤츄린", "aventurine"],
                     "persona_id": "default",
                     "speech_style": {
                         "tone": "casual_confident",
@@ -104,6 +106,7 @@ class JsonDomainLookupStore(DomainLookupStore):
                     "id": "bot_char_02",
                     "type": "bot",
                     "name": "Sunday",
+                    "aliases": ["선데이", "sunday"],
                     "persona_id": "default",
                     "speech_style": {
                         "tone": "measured_formal",

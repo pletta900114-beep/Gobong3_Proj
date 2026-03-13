@@ -101,6 +101,7 @@ MEMORY_PROMOTION_MAX_ITEMS=20
 
 - non-stream JSON 응답
 - stream SSE 응답
+- `audience=user|admin` 실행 경로 분리
 - recent history 반영
 - active character 선택 및 prompt injection
 - 관계 컨텍스트 주입
@@ -113,6 +114,7 @@ non-stream 예시:
 ```json
 {
   "question": "How should you answer now?",
+  "audience": "user",
   "stream": false,
   "mode": "fast",
   "persona_id": "default",
@@ -123,6 +125,18 @@ non-stream 예시:
   "lore_topics": ["Interastral Peace Corporation"]
 }
 ```
+
+`audience` 정책:
+
+- `user`
+  - 기본값
+  - validator 통과 시에만 정상 응답 반환
+  - fallback 응답 생성 금지
+  - validator 실패 시 명시적 실패 응답 반환
+- `admin`
+  - retry / repair / fallback / 상세 판정 정보 유지
+  - 디버깅 및 QA 용도
+  - 응답에 `rp_debug` 포함
 
 non-stream 성공 응답 주요 필드:
 
@@ -138,6 +152,14 @@ non-stream 성공 응답 주요 필드:
 - `used_context`
 - `request_id`
 
+`audience=admin` 추가 필드:
+
+- `rp_debug.validator_passed`
+- `rp_debug.fallback_used`
+- `rp_debug.retry_count`
+- `rp_debug.final_verdict`
+- `rp_debug.failure_reason`
+
 non-stream 실패 응답 예시:
 
 ```json
@@ -145,6 +167,18 @@ non-stream 실패 응답 예시:
   "error": "model_unavailable",
   "message": "LLM service unavailable",
   "request_id": "chat_1234567890"
+}
+```
+
+RP 품질 실패 예시(`audience=user`):
+
+```json
+{
+  "success": false,
+  "error_code": "RP_VALIDATION_FAILED",
+  "message": "RP 응답 품질 검증에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+  "request_id": "chat_1234567890",
+  "failure_reason": "narration_not_third_person"
 }
 ```
 
@@ -268,6 +302,27 @@ pytest -q
 - relationship context prompt injection
 - long-term memory prompt usage
 - admin API flow
+
+QA 스모크 실행 예시:
+
+```bash
+python scripts/rp_qa_smoke.py --max-scenarios 1 --audience admin
+python scripts/rp_qa_smoke.py --max-scenarios 1 --audience admin --save mellow_chat_runtime_data/qa/rp_qa_result.json --save-format json
+python scripts/rp_qa_smoke.py --max-scenarios 1 --audience admin --save mellow_chat_runtime_data/qa/rp_qa_result.md --save-format md
+```
+
+QA 리포트 판정 기준:
+
+- `fallback_used = false` 이고 `validator_passed = true` 이면 `PASS`
+- `fallback_used = true` 이면 `FAIL`
+- `audience=user` 경로에서 validator 실패로 명시적 실패 반환 시 `FAIL`
+
+저장 파일은 실행 시각 기반 `run_id`가 붙어 저장됩니다.
+
+예:
+
+- `rp_qa_result_20260314_040738.json`
+- `rp_qa_result_20260314_040738.md`
 
 ## admin -> user_NN 확장
 

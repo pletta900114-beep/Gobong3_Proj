@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
 import sys
 import uuid
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import mellow_chat_runtime.app_state as app_state
 import mellow_chat_runtime.core.domain_lookup_store as domain_lookup_store_module
-from mellow_chat_runtime.core.agent_brain import AgentResult
+from mellow_chat_runtime.core.agent_brain import AgentBrain, AgentResult
 from mellow_chat_runtime.core.domain_lookup_dispatcher import DomainLookupDispatcher
 from mellow_chat_runtime.core.orchestrator import Orchestrator
 from mellow_chat_runtime.core.rp_parser import parse_scene_event
@@ -40,33 +41,45 @@ class FakeOrchestrator:
 
 
 class RecordingLLM:
-    def __init__(self, fail: bool = False, response_text: str | None = None, response_texts: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        fail: bool = False,
+        response_text: str | None = None,
+        response_texts: list[str] | None = None,
+        response_payloads: list[dict[str, str]] | None = None,
+    ) -> None:
         self.fail = fail
         self.response_text = response_text
         self.response_texts = list(response_texts or [])
+        self.response_payloads = list(response_payloads or [])
         self.chat_calls: list[list[dict[str, str]]] = []
+        self.chat_call_options: list[dict[str, object]] = []
 
     def get_model_for_mode(self, mode: str) -> str:
         return "qwen3.5:9b"
 
-    def _next_response(self, default_text: str) -> str:
+    def _next_response(self, default_text: str) -> tuple[str, str]:
+        if self.response_payloads:
+            payload = self.response_payloads.pop(0)
+            return str(payload.get("text", "")), str(payload.get("thinking", ""))
         if self.response_texts:
-            return self.response_texts.pop(0)
+            return self.response_texts.pop(0), ""
         if self.response_text is not None:
-            return self.response_text
-        return default_text
+            return self.response_text, ""
+        return default_text, ""
 
     async def chat(self, messages, model=None, **kwargs):
         self.chat_calls.append(messages)
+        self.chat_call_options.append(dict(kwargs))
         if self.fail:
             raise RuntimeError("LLM service unavailable")
         user_prompt = messages[-1]["content"]
         history_echo = "no-history"
-        if "Recent Conversation:" in user_prompt:
+        if "Recent Conversation:" in user_prompt or "최근 대화:" in user_prompt:
             history_echo = "history-present"
         default_text = f'그는 숨을 골라 상황을 정리한다.\n\n"reply:{history_echo}"'
-        text = self._next_response(default_text)
-        return SimpleNamespace(text=text, model=model or "qwen3.5:9b")
+        text, thinking = self._next_response(default_text)
+        return SimpleNamespace(text=text, thinking=thinking, model=model or "qwen3.5:9b")
 
     async def generate(self, prompt, system_prompt="", mode="fast", **kwargs):
         self.chat_calls.append(
@@ -298,9 +311,10 @@ def test_character_prompt_enforcement_includes_name_and_tone(tmp_path: Path) -> 
 
     assert response.status_code == 200
     system_prompt = llm.chat_calls[-1][0]["content"]
-    assert "You are Aventurine." in system_prompt
-    assert "Tone:\ncasual_confident" in system_prompt
-    assert "Forbidden:\nout-of-world meta claims" in system_prompt
+    assert "당신은 Aventurine이다." in system_prompt
+    assert "말투:\ncasual_confident" in system_prompt
+    assert "금지 요소:\nout-of-world meta claims" in system_prompt
+    assert "사용자 입력이 한국어이면 서술과 대사를 모두 한국어로 유지하고 영어로 전환하지 않는다" in system_prompt
 
 
 def test_multi_character_speaker_selector_prefers_unsaid_major_character() -> None:
@@ -340,15 +354,16 @@ def test_prompt_includes_relationship_context_and_priority_blocks(tmp_path: Path
     assert response.status_code == 200
     system_prompt = llm.chat_calls[-1][0]["content"]
     user_prompt = llm.chat_calls[-1][1]["content"]
-    assert "Priority Order:" in system_prompt
-    assert "Relationship Context:" in system_prompt
+    assert "우선순위:" in system_prompt
+    assert "관계 맥락:" in system_prompt
     assert "Treat Mellow as a trusted collaborator whose judgment matters." in system_prompt
     assert "warmly strategic" in system_prompt
-    assert "Priority Context:" in user_prompt
-    assert "Scene first:" in user_prompt
-    assert "World constraints:" in user_prompt
-    assert "Character memory:" in user_prompt
-    assert "Relationship context:" in user_prompt
+    assert "출력 제약:" in user_prompt
+    assert "우선 맥락:" in user_prompt
+    assert "장면 우선:" in user_prompt
+    assert "세계 제약:" in user_prompt
+    assert "캐릭터 기억:" in user_prompt
+    assert "관계 맥락:" in user_prompt
 
 
 def test_prompt_uses_long_term_memory_in_generation_context(tmp_path: Path) -> None:
@@ -463,7 +478,7 @@ def test_sanitize_assistant_output_removes_hidden_reasoning_tokens() -> None:
 def test_chat_ask_stores_only_sanitized_assistant_output(tmp_path: Path) -> None:
     init_db()
     contaminated = (
-        "말로우~ 안전하게 진행하자!\n"
+        "어벤츄린은 고개를 기울이며 상황을 차분히 정리한다.\n\n\"말로우, 안전하게 진행하자.\"\n"
         "<|endoftext|><|im_start|>assistant\n"
         "<think>\nprivate draft\n</think>\n"
         "assistant"
@@ -688,10 +703,10 @@ def test_prompt_includes_parsed_scene_event_block(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     user_prompt = llm.chat_calls[-1][1]['content']
-    assert 'Parsed User Scene Event:' in user_prompt
-    assert 'User Narration: 나는 어벤츄린 쪽으로 몸을 기울였다.' in user_prompt
-    assert 'User Dialogue: 이번 판, 네가 보기엔 어때?' in user_prompt
-    assert 'Target Hint: bot_char_01' in user_prompt
+    assert '파싱된 사용자 장면 이벤트:' in user_prompt
+    assert '사용자 서술: 나는 어벤츄린 쪽으로 몸을 기울였다.' in user_prompt
+    assert '사용자 대사: 이번 판, 네가 보기엔 어때?' in user_prompt
+    assert '대상 힌트: bot_char_01' in user_prompt
 
 
 def test_chat_ask_non_stream_rp_output_and_target_selection(tmp_path: Path) -> None:
@@ -791,6 +806,7 @@ def test_chat_ask_repairs_invalid_first_output_into_rp(tmp_path: Path) -> None:
         '/chat/ask',
         json={
             'question': '"선데이, 그 말 진심이야?"',
+            'audience': 'admin',
             'stream': False,
             'mode': 'fast',
             'user_profile_id': 'user_char_01',
@@ -867,3 +883,293 @@ def test_chat_ask_hides_rp_used_context_by_default(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert 'rp' not in response.json()['used_context']
+
+
+
+def test_chat_ask_thinking_only_response_uses_final_answer_retry(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_payloads=[
+        {"text": "", "thinking": "I should answer in character."},
+        {"text": "선데이는 잠시 시선을 내렸다가 다시 마주 본다.\n\n\"그래. 적어도 지금은 거짓 없이 말하고 있어.\"", "thinking": ""},
+    ])
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 천천히 고개를 들고 선데이를 바라봤다.\n"선데이, 그 말 진심이야?"',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_ids': ['bot_char_01', 'bot_char_02'],
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert '"그래. 적어도 지금은 거짓 없이 말하고 있어."' in body['response']
+    assert '서두르지 말자' not in body['response']
+    assert len(llm.chat_calls) == 2
+    assert llm.chat_call_options[0]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>', '</think>', '<think>']
+    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>']
+
+
+def test_chat_ask_thinking_only_retry_escalates_to_no_stop_when_needed(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_payloads=[
+        {"text": "", "thinking": "I should answer in character."},
+        {"text": "", "thinking": "Still thinking."},
+        {"text": "선데이는 시선을 비껴 두었다가 조용히 다시 맞춘다.\n\n\"지금은 둘러대지 않을게. 그 말은 진심이야.\"", "thinking": ""},
+    ])
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 잠깐 숨을 멈추고 선데이를 바라봤다.\n"정말 솔직하게 말해줘."',
+            'audience': 'admin',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_ids': ['bot_char_01', 'bot_char_02'],
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert '"지금은 둘러대지 않을게. 그 말은 진심이야."' in body['response']
+    assert len(llm.chat_calls) == 3
+    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>']
+    assert llm.chat_call_options[2]['options'] == {}
+
+
+def test_chat_ask_repairs_english_drift_in_korean_session(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_texts=[
+        'He watches you in silence.\n\n"Yes. I meant it."',
+        '선데이는 숨을 고른 뒤 조용히 시선을 맞춘다.\n\n"그래. 그 말은 진심이야."',
+    ])
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 천천히 고개를 들고 선데이를 바라봤다.\n"선데이, 그 말 진심이야?"',
+            'audience': 'admin',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_id': 'bot_char_02',
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert '선데이는' in body['response']
+    assert '"그래. 그 말은 진심이야."' in body['response']
+    assert 'He watches you in silence.' not in body['response']
+    assert len(llm.chat_calls) == 2
+
+
+def test_retry_path_repairs_english_drift_in_korean_session(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_payloads=[
+        {"text": "", "thinking": "I should answer in character."},
+        {"text": "He lowers his gaze for a beat.\n\n\"Yes. I mean it.\"", "thinking": ""},
+        {"text": "선데이는 시선을 잠시 내렸다가 다시 들어 올린다.\n\n\"그래. 그 말은 진심이야.\"", "thinking": ""},
+    ])
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 조용히 숨을 골랐다.\n"선데이, 이번엔 피하지 마."',
+            'audience': 'admin',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_ids': ['bot_char_01', 'bot_char_02'],
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert '선데이는' in body['response']
+    assert '"그래. 그 말은 진심이야."' in body['response']
+    assert 'He lowers his gaze for a beat.' not in body['response']
+    assert len(llm.chat_calls) == 3
+    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>']
+    assert llm.chat_call_options[2]['options'] == {}
+
+
+def test_validate_rp_output_rejects_first_person_narration() -> None:
+    brain = AgentBrain(llm_service=None, lookup_dispatcher=None)
+
+    ok, reasons = brain._validate_rp_output(
+        '나는 천천히 그를 바라봤다.\n\n"그래."',
+        active_character={'name': '선데이'},
+        expected_language='ko',
+    )
+
+    assert not ok
+    assert 'narration_not_third_person' in reasons
+
+    ok, reasons = brain._validate_rp_output(
+        '선데이는 천천히 상대를 바라봤다.\n\n"그래."',
+        active_character={'name': '선데이'},
+        expected_language='ko',
+    )
+
+    assert ok
+    assert reasons == []
+
+
+def test_validate_rp_output_catches_english_drift_for_korean_input() -> None:
+    brain = AgentBrain(llm_service=None, lookup_dispatcher=None)
+
+    ok, reasons = brain._validate_rp_output(
+        'He looks at you in silence.\n\n"I meant it."',
+        active_character={'name': '선데이'},
+        expected_language='ko',
+    )
+
+    assert not ok
+    assert 'language_drift' in reasons
+
+
+def test_chat_ask_user_audience_returns_validation_failure_without_fallback(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_text='나는 천천히 시선을 들었다.\n\n"그래."')
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 천천히 고개를 들고 선데이를 바라봤다.\n"선데이, 그 말 진심이야?"',
+            'audience': 'user',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_id': 'bot_char_02',
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body['success'] is False
+    assert body['error_code'] == 'POV_RULE_FAILED'
+    assert 'fallback' not in body['message'].lower()
+
+
+def test_chat_ask_user_audience_returns_normal_response_on_valid_output(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_text='선데이는 천천히 시선을 들어 상대를 마주 본다.\n\n"그래. 그 말은 진심이야."')
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 천천히 고개를 들고 선데이를 바라봤다.\n"선데이, 그 말 진심이야?"',
+            'audience': 'user',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_id': 'bot_char_02',
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['response'].startswith('선데이는')
+    assert 'rp_debug' not in body
+
+
+def test_chat_ask_admin_audience_keeps_fallback_and_marks_fail(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM(response_texts=[
+        'He watches you in silence.\n\n"Yes. I meant it."',
+        '나는 시선을 잠시 내렸다.\n\n"그래."',
+    ])
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '나는 천천히 고개를 들고 선데이를 바라봤다.\n"선데이, 그 말 진심이야?"',
+            'audience': 'admin',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_id': 'bot_char_02',
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['rp_debug']['fallback_used'] is True
+    assert body['rp_debug']['final_verdict'] == 'FAIL'
+    assert body['rp_debug']['validator_passed'] is False
+
+
+def test_rp_qa_report_json_and_markdown_share_final_verdict() -> None:
+    spec = importlib.util.spec_from_file_location('rp_qa_smoke', Path(r'D:\Gobong3_Proj\scripts\rp_qa_smoke.py'))
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    result = module.ScenarioResult(
+        generated_at='2026-03-14T03:31:24',
+        run_id='run_20260314_033124_01',
+        name='sunday_sincerity',
+        ok=False,
+        validator_passed=False,
+        final_verdict='FAIL',
+        failure_reason='fallback_used',
+        speaker_id='bot_char_02',
+        input_language='ko',
+        output_language='ko',
+        quoted_dialogue=True,
+        third_person=True,
+        english_drift=False,
+        fallback_used=True,
+        retry_used=True,
+        processing_time_ms=46100,
+        reasons=['fallback_used'],
+        response_preview='그는 잠시 숨을 고르며 상대의 눈을 똑바로 바라본다.\n\n"지금은 서두르지 말자. 이 장면 안에서 차분히 이어가면 돼."',
+    )
+    payload = module._build_result_payload([result])
+    markdown = module._render_markdown(payload)
+
+    assert payload['results'][0]['final_verdict'] == 'FAIL'
+    assert '- final_verdict: FAIL' in markdown
+    assert 'generated_at' in markdown
+    assert 'run_id' in markdown

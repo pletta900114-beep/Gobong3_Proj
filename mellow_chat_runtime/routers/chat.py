@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 class ChatRequest(BaseModel):
     question: str = Field(...)
+    audience: str = Field('user')
     mode: str = Field('fast')
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -67,6 +68,14 @@ class ChatErrorResponse(BaseModel):
     error: str
     message: str
     request_id: str
+
+
+class ChatValidationFailureResponse(BaseModel):
+    success: bool
+    error_code: str
+    message: str
+    request_id: str
+    failure_reason: str
 
 
 def _user_from_header(x_user: Optional[str]) -> str:
@@ -146,6 +155,27 @@ def _stream_error_event(exc: Exception, request_id: str) -> str:
     _, error_code, message = _classify_chat_error(exc)
     payload = ChatErrorResponse(error=error_code, message=message, request_id=request_id).model_dump()
     return f'event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'
+
+
+def _validation_failure_response(result: Any, request_id: str, status_code: int = 422) -> JSONResponse:
+    payload = ChatValidationFailureResponse(
+        success=False,
+        error_code=str(getattr(result, 'error_code', '') or 'RP_VALIDATION_FAILED'),
+        message=str(getattr(result, 'message', '') or 'RP 응답 품질 검증에 실패했습니다. 잠시 후 다시 시도해 주세요.'),
+        request_id=request_id,
+        failure_reason=str(getattr(result, 'failure_reason', '') or 'RP_VALIDATION_FAILED'),
+    ).model_dump()
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+def _validation_failure_payload(result: Any, request_id: str) -> Dict[str, Any]:
+    return ChatValidationFailureResponse(
+        success=False,
+        error_code=str(getattr(result, 'error_code', '') or 'RP_VALIDATION_FAILED'),
+        message=str(getattr(result, 'message', '') or 'RP 응답 품질 검증에 실패했습니다. 잠시 후 다시 시도해 주세요.'),
+        request_id=request_id,
+        failure_reason=str(getattr(result, 'failure_reason', '') or 'RP_VALIDATION_FAILED'),
+    ).model_dump()
 
 
 def _build_sanitized_history(rows: List[ChatMessage], max_items: int = 8) -> List[Dict[str, str]]:
@@ -403,13 +433,14 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
         'lore_keys': lore_keys,
     }
     logger.info(
-        'chat.ask.start request_id=%s session_id=%s user=%s selected_model=%s selected_speaker=%s stream=%s input_mode=%s target_hint=%s',
+        'chat.ask.start request_id=%s session_id=%s user=%s selected_model=%s selected_speaker=%s stream=%s audience=%s input_mode=%s target_hint=%s',
         request_id,
         session.id,
         username,
         selection.model,
         selected_speaker_id or request.character_id,
         request.stream,
+        request.audience,
         parsed_scene_event.input_mode,
         parsed_scene_event.target_character_hint,
     )
@@ -431,7 +462,12 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
                 selected_model=selection.model,
                 scene_event=parsed_scene_event,
                 target_character_hint=parsed_scene_event.target_character_hint,
+                request_id=request_id,
+                audience=request.audience,
             )
+            if request.audience == 'user' and not result.success:
+                yield f'event: error\ndata: {json.dumps(_validation_failure_payload(result, request_id), ensure_ascii=False)}\n\n'
+                return
 
             full = sanitize_assistant_text(result.answer or '')
             for i in range(0, len(full), 200):
@@ -475,6 +511,14 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
                 },
                 'request_id': request_id,
             }
+            if request.audience == 'admin':
+                done_payload['rp_debug'] = {
+                    'validator_passed': result.validator_passed,
+                    'fallback_used': result.fallback_used,
+                    'retry_count': result.retry_count,
+                    'final_verdict': result.final_verdict,
+                    'failure_reason': result.failure_reason,
+                }
             logger.info(
                 'chat.ask.end request_id=%s session_id=%s message_id=%s success=true latency_ms=%s',
                 request_id,
@@ -514,8 +558,20 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
             selected_model=selection.model,
             scene_event=parsed_scene_event,
             target_character_hint=parsed_scene_event.target_character_hint,
+            request_id=request_id,
+            audience=request.audience,
         )
         elapsed_ms = int((time.time() - started) * 1000)
+        if request.audience == 'user' and not result.success:
+            logger.warning(
+                'chat.ask.validation_failed request_id=%s session_id=%s latency_ms=%s error_code=%s failure_reason=%s',
+                request_id,
+                session.id,
+                elapsed_ms,
+                result.error_code,
+                result.failure_reason,
+            )
+            return _validation_failure_response(result, request_id)
         cleaned_response = sanitize_assistant_text(result.answer or '')
         assistant = ChatMessage(
             session_id=session.id,
@@ -540,7 +596,7 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
             assistant.id,
             elapsed_ms,
         )
-        return {
+        response_payload = {
             'response': cleaned_response,
             'session_id': session.id,
             'message_id': assistant.id,
@@ -559,6 +615,16 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
             },
             'request_id': request_id,
         }
+        if request.audience == 'admin':
+            response_payload['rp_debug'] = {
+                'validator_passed': result.validator_passed,
+                'fallback_used': result.fallback_used,
+                'retry_count': result.retry_count,
+                'final_verdict': result.final_verdict,
+                'failure_reason': result.failure_reason,
+                'failure_reasons': result.failure_reasons,
+            }
+        return response_payload
     except Exception as e:
         elapsed_ms = int((time.time() - started) * 1000)
         logger.exception(

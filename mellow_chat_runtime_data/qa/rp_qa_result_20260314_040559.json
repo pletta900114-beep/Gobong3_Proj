@@ -1,0 +1,34 @@
+# RP QA Smoke Result
+
+- generated_at: 2026-03-14T04:05:59
+- run_id: 20260314_040559
+- total: 1
+- passed: 1
+- failed: 0
+- retry_used: 1
+- fallback_used: 0
+- english_drift_detected: 0
+
+## Scenarios
+
+### sunday_sincerity
+- status: PASS
+- generated_at: 2026-03-14T04:05:28
+- run_id: run_20260314_040528_01
+- validator_passed: True
+- final_verdict: PASS
+- failure_reason: -
+- speaker_id: bot_char_02
+- input_language: ko
+- output_language: ko
+- quoted_dialogue: True
+- third_person: True
+- english_drift: False
+- retry_used: True
+- fallback_used: False
+- processing_time_ms: 30353
+- reasons: -
+
+```text
+선데이는 당신의 시선을 피하지 않고 잠시 고개를 들어 차분한 눈빛으로 당신을 응시했다. 그의 표정에서는 허세가 없었으며, 오직 성실함과 진심만이 담겨 있었다. 그는 대답하기 위해 손을 가슴 쪽으로 가져갔으나, 그 긴...
+```

@@ -81,6 +81,8 @@ class Orchestrator:
         scene_id: str = 'default',
         scene_event: Optional[ParsedSceneEvent] = None,
         target_character_hint: Optional[str] = None,
+        request_id: Optional[str] = None,
+        audience: str = 'user',
     ) -> AgentResult:
         self._init_agent_if_possible()
         if self.agent is None:
@@ -100,6 +102,8 @@ class Orchestrator:
                 selected_model=selected_model,
                 scene_event=scene_event,
                 target_character_hint=target_character_hint,
+                request_id=request_id,
+                audience=audience,
             )
 
     async def health_check(self) -> Dict[str, Any]:

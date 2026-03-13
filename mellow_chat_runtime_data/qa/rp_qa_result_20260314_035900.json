@@ -1,0 +1,34 @@
+{
+  "generated_at": "2026-03-14T04:04:50",
+  "run_id": "20260314_040450",
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "retry_used": 1,
+    "fallback_used": 0,
+    "english_drift_detected": 0
+  },
+  "results": [
+    {
+      "generated_at": "2026-03-14T04:02:59",
+      "run_id": "run_20260314_040259_01",
+      "name": "sunday_sincerity",
+      "ok": true,
+      "validator_passed": true,
+      "final_verdict": "PASS",
+      "failure_reason": "",
+      "speaker_id": "bot_char_02",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": false,
+      "retry_used": true,
+      "processing_time_ms": 110937,
+      "reasons": [],
+      "response_preview": "선데이의 시선은 평온하게 사용자에게로 집중하며 잠시 멈췄다. \"말했던 바는 변함없다. 그것이 모두 내 진심이었다.\""
+    }
+  ]
+}

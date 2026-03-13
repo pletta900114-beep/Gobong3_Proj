@@ -21,6 +21,14 @@ from mellow_chat_runtime.services.llm_service import create_llm_service
 logger = logging.getLogger(__name__)
 
 
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(name)s %(message)s",
+        force=True,
+    )
+
+
 async def startup() -> None:
     settings = get_settings()
     app_state.settings = settings
@@ -102,6 +110,7 @@ def main() -> None:
     import uvicorn
 
     settings = get_settings()
+    configure_logging()
     uvicorn.run(
         "mellow_chat_runtime.main:app",
         host=settings.api_host,

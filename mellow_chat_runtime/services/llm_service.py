@@ -59,6 +59,7 @@ class ChatContext:
 class LLMResponse:
     text: str
     model: str
+    thinking: str = ""
     tokens_generated: int = 0
     generation_time_ms: float = 0.0
     is_complete: bool = True
@@ -184,10 +185,42 @@ class LLMService:
                 data = await resp.json()
             message = data.get("message", {})
             text = message.get("content") or ""
+            thinking = message.get("thinking") or ""
             tool_calls = message.get("tool_calls")
+            logger.info(
+                "llm.chat.response model=%s content_len=%s thinking_len=%s thinking_only=%s done=%s done_reason=%s eval_count=%s prompt_eval_count=%s message_keys=%s response_keys=%s",
+                use_model,
+                len(text),
+                len(thinking),
+                bool(thinking.strip()) and not bool(text.strip()),
+                data.get("done"),
+                data.get("done_reason"),
+                data.get("eval_count"),
+                data.get("prompt_eval_count"),
+                sorted(message.keys()) if isinstance(message, dict) else [],
+                sorted(data.keys()),
+            )
+            if not text.strip():
+                logger.warning(
+                    "llm.chat.empty_content model=%s thinking_len=%s thinking_only=%s done=%s done_reason=%s raw_message=%s",
+                    use_model,
+                    len(thinking),
+                    bool(thinking.strip()),
+                    data.get("done"),
+                    data.get("done_reason"),
+                    json.dumps(message, ensure_ascii=False, default=str)[:800],
+                )
+            if thinking.strip():
+                logger.warning(
+                    "llm.chat.thinking_present model=%s content_len=%s thinking_preview=%s",
+                    use_model,
+                    len(text),
+                    json.dumps(str(thinking), ensure_ascii=False)[:800],
+                )
             return LLMResponse(
                 text=text,
                 model=use_model,
+                thinking=thinking,
                 tokens_generated=int(data.get("eval_count", 0) or 0),
                 generation_time_ms=float((data.get("eval_duration", 0) or 0) / 1_000_000),
                 is_complete=True,

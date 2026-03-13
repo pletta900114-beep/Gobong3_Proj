@@ -1,0 +1,179 @@
+{
+  "personas": {
+    "default": {
+      "id": "default",
+      "name": "Narrator",
+      "description": "A concise in-world guide who keeps continuity and tone."
+    }
+  },
+  "user_profiles": {
+    "user_char_01": {
+      "id": "user_char_01",
+      "name": "Mellow",
+      "profile": "UI/UX designer and programmer focused on character immersion.",
+      "traits": [
+        "design-driven",
+        "continuity-focused"
+      ]
+    }
+  },
+  "user_characters": {
+    "user_char_01": {
+      "id": "user_char_01",
+      "type": "user",
+      "name": "Mellow",
+      "profile": "UI/UX designer and programmer",
+      "traits": [
+        "design-driven",
+        "character immersion"
+      ],
+      "relationship_keys": [
+        "crew_main"
+      ],
+      "is_major": true
+    }
+  },
+  "bot_characters": {
+    "bot_char_01": {
+      "id": "bot_char_01",
+      "type": "bot",
+      "name": "Aventurine",
+      "persona_id": "default",
+      "speech_style": {
+        "tone": "casual_confident",
+        "forbidden": [
+          "out-of-world meta claims"
+        ]
+      },
+      "relationship_keys": [
+        "crew_main"
+      ],
+      "is_major": true
+    },
+    "bot_char_02": {
+      "id": "bot_char_02",
+      "type": "bot",
+      "name": "Sunday",
+      "persona_id": "default",
+      "speech_style": {
+        "tone": "measured_formal",
+        "forbidden": []
+      },
+      "relationship_keys": [
+        "crew_support"
+      ],
+      "is_major": false
+    }
+  },
+  "lorebook": {
+    "lore_001": {
+      "id": "lore_001",
+      "topic": "Interastral Peace Corporation",
+      "aliases": [
+        "IPC",
+        "스타피스 컴퍼니"
+      ],
+      "content": "A galaxy-scale organization handling finance and contracts.",
+      "priority": 10
+    },
+    "lore_002": {
+      "id": "lore_002",
+      "topic": "Stonehearts",
+      "aliases": [
+        "스톤하트",
+        "Ten Stonehearts"
+      ],
+      "content": "Senior strategic figures aligned with high-value IPC operations.",
+      "priority": 8
+    },
+    "lore_003": {
+      "id": "lore_003",
+      "topic": "Astral Lounge Protocol",
+      "aliases": [
+        "라운지 규약",
+        "Lounge protocol"
+      ],
+      "content": "Negotiations in shared lounges prioritize calm tone and turn-taking.",
+      "priority": 6
+    }
+  },
+  "scene_state": {
+    "scene_default": {
+      "id": "scene_default",
+      "location": "Lounge",
+      "time": "Evening",
+      "participants": [
+        "user_char_01",
+        "bot_char_01",
+        "bot_char_02"
+      ],
+      "goal": "Synchronize character plans",
+      "mood": "calm",
+      "rules": [
+        {
+          "key": "include_speakers",
+          "value": [
+            "bot_char_01",
+            "bot_char_02"
+          ]
+        },
+        {
+          "key": "exclude_speakers",
+          "value": []
+        }
+      ]
+    }
+  },
+  "world_state": {
+    "default": {
+      "id": "default",
+      "location": "Astral lounge",
+      "time": "Evening",
+      "state": "Stable",
+      "facts": [
+        "Travel routes are open",
+        "No immediate external crisis"
+      ]
+    }
+  },
+  "memories": {
+    "user_char_01": {
+      "character_id": "user_char_01",
+      "important_memories": [
+        "Past project incident",
+        "Recent trust shift"
+      ],
+      "possessions": [
+        "Card case",
+        "Notebook"
+      ]
+    },
+    "bot_char_01": {
+      "character_id": "bot_char_01",
+      "important_memories": [
+        "Debt negotiation at station nine"
+      ],
+      "possessions": [
+        "Gemstone token"
+      ]
+    },
+    "bot_char_02": {
+      "character_id": "bot_char_02",
+      "important_memories": [
+        "Public oath in Penacony assembly hall"
+      ],
+      "possessions": [
+        "Ceremonial notebook"
+      ]
+    }
+  },
+  "dialogue_priority": {
+    "default": {
+      "major_weight": 1.0,
+      "minor_weight": 0.65,
+      "recency_penalty": 0.35,
+      "max_consecutive_turns": 1,
+      "rules": "Major characters lead the turn, but minor characters should still enter regularly."
+    }
+  }
+}

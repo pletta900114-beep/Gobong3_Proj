@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+mellow_chat_runtime_data/chatbot.db
+mellow_chat_runtime_data/domain_data.json

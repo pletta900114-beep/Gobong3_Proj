@@ -9,7 +9,7 @@ from mellow_chat_runtime.core.domain_lookup_store import DomainLookupStore
 @dataclass
 class LookupResult:
     name: str
-    payload: Dict[str, Any]
+    payload: Dict[str, Any] | List[Dict[str, Any]]
 
 
 class DomainLookupDispatcher:
@@ -22,6 +22,7 @@ class DomainLookupDispatcher:
         "lookup_bot_character",
         "lookup_lorebook",
         "lookup_memories_possessions",
+        "lookup_relationships",
         "lookup_world_state",
         "lookup_scene_state",
         "lookup_dialogue_priority",
@@ -57,6 +58,10 @@ class DomainLookupDispatcher:
                 "args": ["character_id"],
             },
             {
+                "name": "lookup_relationships",
+                "args": ["character_id", "counterpart_ids"],
+            },
+            {
                 "name": "lookup_world_state",
                 "args": ["world_id"],
             },
@@ -87,6 +92,17 @@ class DomainLookupDispatcher:
             return LookupResult(name=name, payload=self._store.get_lore(str(args.get("topic", ""))))
         if name == "lookup_memories_possessions":
             return LookupResult(name=name, payload=self._store.get_memory_and_possessions(str(args.get("character_id", ""))))
+        if name == "lookup_relationships":
+            counterpart_ids = args.get("counterpart_ids")
+            if not isinstance(counterpart_ids, list):
+                counterpart_ids = []
+            return LookupResult(
+                name=name,
+                payload=self._store.get_relationships(
+                    str(args.get("character_id", "")),
+                    counterpart_ids=[str(item) for item in counterpart_ids if str(item).strip()],
+                ),
+            )
         if name == "lookup_world_state":
             return LookupResult(name=name, payload=self._store.get_world_state(str(args.get("world_id", "default"))))
         if name == "lookup_scene_state":

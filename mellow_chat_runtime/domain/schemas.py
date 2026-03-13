@@ -67,6 +67,14 @@ class MemoryPossession(BaseModel):
     possessions: List[str] = Field(default_factory=list)
 
 
+class RelationshipContext(BaseModel):
+    target_id: str
+    summary: str = ""
+    tone: str = "neutral"
+    boundaries: List[str] = Field(default_factory=list)
+    shared_memories: List[str] = Field(default_factory=list)
+
+
 class DialoguePriority(BaseModel):
     scene_id: str
     major_weight: float = 1.0
@@ -84,5 +92,6 @@ class DomainDataBundle(BaseModel):
     scene_state: Dict[str, SceneState] = Field(default_factory=dict)
     world_state: Dict[str, WorldState] = Field(default_factory=dict)
     memories: Dict[str, MemoryPossession] = Field(default_factory=dict)
+    relationships: Dict[str, Dict[str, RelationshipContext]] = Field(default_factory=dict)
     dialogue_priority: Dict[str, DialoguePriority] = Field(default_factory=dict)
     user_profiles: Dict[str, Dict[str, Optional[str]]] = Field(default_factory=dict)

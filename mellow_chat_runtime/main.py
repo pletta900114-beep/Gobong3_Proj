@@ -12,6 +12,7 @@ from mellow_chat_runtime.core.domain_lookup_dispatcher import DomainLookupDispat
 from mellow_chat_runtime.core.domain_lookup_store import get_domain_store
 from mellow_chat_runtime.core.orchestrator import Orchestrator
 from mellow_chat_runtime.infra.database import init_db
+from mellow_chat_runtime.routers.admin import router as admin_router
 from mellow_chat_runtime.routers.chat import router as chat_router
 from mellow_chat_runtime.routers.models import router as model_router
 from mellow_chat_runtime.routers.runtime import router as runtime_router
@@ -86,6 +87,7 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(model_router)
 app.include_router(runtime_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")

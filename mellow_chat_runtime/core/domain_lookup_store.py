@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from threading import RLock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -29,6 +29,9 @@ class DomainLookupStore:
     def get_memory_and_possessions(self, character_id: str) -> Dict[str, Any]:
         raise NotImplementedError
 
+    def get_relationships(self, character_id: str, counterpart_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        raise NotImplementedError
+
     def get_world_state(self, world_id: str = "default") -> Dict[str, Any]:
         raise NotImplementedError
 
@@ -38,7 +41,16 @@ class DomainLookupStore:
     def get_dialogue_priority(self, scene_id: str = "default") -> Dict[str, Any]:
         raise NotImplementedError
 
+    def list_section(self, section: str) -> Dict[str, Dict[str, Any]]:
+        raise NotImplementedError
+
+    def get_section_item(self, section: str, key: str) -> Dict[str, Any]:
+        raise NotImplementedError
+
     def upsert(self, section: str, key: str, value: Dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def delete(self, section: str, key: str) -> bool:
         raise NotImplementedError
 
 
@@ -99,6 +111,33 @@ class JsonDomainLookupStore(DomainLookupStore):
                     },
                     "relationship_keys": ["crew_support"],
                     "is_major": False,
+                },
+            },
+            "relationships": {
+                "bot_char_01": {
+                    "user_char_01": {
+                        "target_id": "user_char_01",
+                        "summary": "Treat Mellow as a trusted collaborator whose judgment matters.",
+                        "tone": "warmly strategic",
+                        "boundaries": ["Do not humiliate the user", "Do not dismiss prior agreements"],
+                        "shared_memories": ["They stabilized a tense station negotiation together."],
+                    },
+                    "bot_char_02": {
+                        "target_id": "bot_char_02",
+                        "summary": "Respect Sunday as a careful ally with formal expectations.",
+                        "tone": "polite but competitive",
+                        "boundaries": ["Avoid open mockery in shared scenes"],
+                        "shared_memories": ["They coordinated during a Penacony diplomatic review."],
+                    },
+                },
+                "bot_char_02": {
+                    "user_char_01": {
+                        "target_id": "user_char_01",
+                        "summary": "Treat Mellow as capable and sincerity-driven.",
+                        "tone": "measured respect",
+                        "boundaries": ["Avoid manipulative baiting"],
+                        "shared_memories": ["They discussed public duty after the assembly hall oath."],
+                    }
                 },
             },
             "lorebook": {
@@ -223,6 +262,23 @@ class JsonDomainLookupStore(DomainLookupStore):
             )
         )
 
+    def get_relationships(self, character_id: str, counterpart_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        section = self._data.get("relationships", {})
+        raw = section.get(character_id, {})
+        if not isinstance(raw, dict):
+            return []
+        allowed = {item.strip() for item in (counterpart_ids or []) if isinstance(item, str) and item.strip()}
+        results: List[Dict[str, Any]] = []
+        for target_id, payload in raw.items():
+            if allowed and target_id not in allowed:
+                continue
+            if isinstance(payload, dict):
+                item = dict(payload)
+                item.setdefault("target_id", target_id)
+                results.append(item)
+        results.sort(key=lambda item: str(item.get("target_id", "")))
+        return results
+
     def get_world_state(self, world_id: str = "default") -> Dict[str, Any]:
         return dict(self._data.get("world_state", {}).get(world_id, self._data["world_state"]["default"]))
 
@@ -234,12 +290,34 @@ class JsonDomainLookupStore(DomainLookupStore):
     def get_dialogue_priority(self, scene_id: str = "default") -> Dict[str, Any]:
         return dict(self._data.get("dialogue_priority", {}).get(scene_id, self._data["dialogue_priority"]["default"]))
 
+    def list_section(self, section: str) -> Dict[str, Dict[str, Any]]:
+        raw = self._data.get(section, {})
+        if not isinstance(raw, dict):
+            return {}
+        return {str(key): dict(value) for key, value in raw.items() if isinstance(value, dict)}
+
+    def get_section_item(self, section: str, key: str) -> Dict[str, Any]:
+        raw = self._data.get(section, {})
+        if not isinstance(raw, dict):
+            return {}
+        value = raw.get(key, {})
+        return dict(value) if isinstance(value, dict) else {}
+
     def upsert(self, section: str, key: str, value: Dict[str, Any]) -> None:
         with self._lock:
             target = self._data.setdefault(section, {})
             if isinstance(target, dict):
                 target[key] = value
                 self._save_to_disk()
+
+    def delete(self, section: str, key: str) -> bool:
+        with self._lock:
+            target = self._data.get(section, {})
+            if not isinstance(target, dict) or key not in target:
+                return False
+            del target[key]
+            self._save_to_disk()
+            return True
 
 
 class VectorDomainLookupStore(DomainLookupStore):
@@ -275,6 +353,9 @@ class VectorDomainLookupStore(DomainLookupStore):
     def get_memory_and_possessions(self, character_id: str) -> Dict[str, Any]:
         return self._fallback.get_memory_and_possessions(character_id)
 
+    def get_relationships(self, character_id: str, counterpart_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        return self._fallback.get_relationships(character_id, counterpart_ids=counterpart_ids)
+
     def get_world_state(self, world_id: str = "default") -> Dict[str, Any]:
         return self._fallback.get_world_state(world_id)
 
@@ -284,8 +365,17 @@ class VectorDomainLookupStore(DomainLookupStore):
     def get_dialogue_priority(self, scene_id: str = "default") -> Dict[str, Any]:
         return self._fallback.get_dialogue_priority(scene_id)
 
+    def list_section(self, section: str) -> Dict[str, Dict[str, Any]]:
+        return self._fallback.list_section(section)
+
+    def get_section_item(self, section: str, key: str) -> Dict[str, Any]:
+        return self._fallback.get_section_item(section, key)
+
     def upsert(self, section: str, key: str, value: Dict[str, Any]) -> None:
         self._fallback.upsert(section=section, key=key, value=value)
+
+    def delete(self, section: str, key: str) -> bool:
+        return self._fallback.delete(section=section, key=key)
 
     def _vector_search_lore(self, topic: str) -> Dict[str, Any]:
         if not self._lore_search_url:

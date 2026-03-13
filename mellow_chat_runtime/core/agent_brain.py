@@ -67,6 +67,12 @@ class AgentBrain:
         world_state = self._lookup.execute("lookup_world_state", {"world_id": world_id}).payload
         scene_state = self._lookup.execute("lookup_scene_state", {"scene_id": scene_id}).payload
         dialogue_priority = self._lookup.execute("lookup_dialogue_priority", {"scene_id": scene_id}).payload
+        active_character = self._resolve_active_character(character_id)
+        counterpart_ids = self._resolve_counterpart_ids(scene_state, character_id)
+        relationships = self._lookup.execute(
+            "lookup_relationships",
+            {"character_id": character_id, "counterpart_ids": counterpart_ids},
+        ).payload
 
         steps.append(
             AgentStep(
@@ -88,18 +94,26 @@ class AgentBrain:
                     "world_state": world_state,
                     "scene_state": scene_state,
                     "dialogue_priority": dialogue_priority,
+                    "active_character": active_character,
+                    "relationships": relationships,
                 }),
             )
         )
 
-        system_prompt = build_system_prompt(persona=persona, dialogue_priority=dialogue_priority)
+        system_prompt = build_system_prompt(
+            persona=persona,
+            dialogue_priority=dialogue_priority,
+            active_character=active_character,
+            relationships=relationships if isinstance(relationships, list) else [],
+        )
         user_prompt = build_user_prompt(
             user_text=user_input,
-            user_profile=user_profile,
-            lore=lore,
-            memories=memories,
-            world_state=world_state,
-            scene_state=scene_state,
+            user_profile=user_profile if isinstance(user_profile, dict) else {},
+            lore=lore if isinstance(lore, dict) else {},
+            memories=self._prioritize_memories(memories if isinstance(memories, dict) else {}),
+            world_state=world_state if isinstance(world_state, dict) else {},
+            scene_state=scene_state if isinstance(scene_state, dict) else {},
+            relationships=relationships if isinstance(relationships, list) else [],
             history=history,
         )
 
@@ -112,7 +126,7 @@ class AgentBrain:
             fallback = await self._llm.generate(prompt=user_prompt, system_prompt=system_prompt, mode=mode)
             answer = (fallback.content or "").strip()
 
-        answer = apply_dialogue_weighting(answer, dialogue_priority)
+        answer = apply_dialogue_weighting(answer, dialogue_priority if isinstance(dialogue_priority, dict) else {})
 
         if self._is_empty_llm_response(answer):
             answer = "I need a bit more context to respond consistently with the current world state."
@@ -140,3 +154,42 @@ class AgentBrain:
         if len(messages) <= self._context_window:
             return messages
         return messages[-self._context_window :]
+
+    def _resolve_active_character(self, character_id: str) -> Dict[str, Any]:
+        cleaned_character_id = (character_id or "").strip()
+        if not cleaned_character_id or cleaned_character_id == "default":
+            return {"name": "Narrator", "type": "bot", "role": "narrator", "speech_style": {"tone": "neutral", "forbidden": []}}
+
+        bot_character = self._lookup.execute("lookup_bot_character", {"character_id": cleaned_character_id}).payload
+        if bot_character:
+            return bot_character
+
+        user_character = self._lookup.execute("lookup_user_character", {"character_id": cleaned_character_id}).payload
+        if user_character:
+            return user_character
+
+        return {
+            "id": cleaned_character_id,
+            "name": cleaned_character_id,
+            "type": "bot",
+            "role": "character",
+            "speech_style": {"tone": "neutral", "forbidden": []},
+        }
+
+    def _resolve_counterpart_ids(self, scene_state: Dict[str, Any], character_id: str) -> List[str]:
+        participants = scene_state.get("participants", []) if isinstance(scene_state, dict) else []
+        if not isinstance(participants, list):
+            return []
+        return [str(item).strip() for item in participants if str(item).strip() and str(item).strip() != character_id]
+
+    def _prioritize_memories(self, memories: Dict[str, Any]) -> Dict[str, Any]:
+        items = memories.get("important_memories", []) if isinstance(memories, dict) else []
+        if not isinstance(items, list):
+            items = []
+        cleaned = [str(item).strip() for item in items if str(item).strip()]
+        possessions = memories.get("possessions", []) if isinstance(memories.get("possessions", []), list) else []
+        return {
+            "character_id": memories.get("character_id", ""),
+            "important_memories": cleaned[-5:],
+            "possessions": [str(item).strip() for item in possessions if str(item).strip()][:5],
+        }

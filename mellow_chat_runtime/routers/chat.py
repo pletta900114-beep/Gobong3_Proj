@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -26,6 +29,7 @@ from mellow_chat_runtime.services.model_routing_service import ModelRoutingServi
 
 router = APIRouter(tags=["Chat"])
 model_router = ModelRoutingService(default_provider="ollama")
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
@@ -54,6 +58,12 @@ class SessionParticipantsResponse(BaseModel):
     session_id: int
     user_character_ids: List[str] = Field(default_factory=list)
     bot_character_ids: List[str] = Field(default_factory=list)
+
+
+class ChatErrorResponse(BaseModel):
+    error: str
+    message: str
+    request_id: str
 
 
 def _user_from_header(x_user: Optional[str]) -> str:
@@ -104,6 +114,35 @@ def _get_participants_from_session(session: ChatSession) -> Dict[str, List[str]]
         "user_character_ids": _parse_json_list(session.user_character_ids_json),
         "bot_character_ids": _parse_json_list(session.bot_character_ids_json),
     }
+
+
+def _new_request_id() -> str:
+    return f"chat_{uuid.uuid4().hex[:10]}"
+
+
+def _classify_chat_error(exc: Exception) -> tuple[int, str, str]:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail if isinstance(exc.detail, str) else "request_failed"
+        return exc.status_code, "request_failed", detail
+    message = str(exc).strip() or "Chat request failed"
+    lowered = message.lower()
+    if "llm service unavailable" in lowered or "orchestrator not initialized" in lowered:
+        return 503, "model_unavailable", message
+    return 500, "generation_failed", message
+
+
+def _non_stream_error_response(exc: Exception, request_id: str) -> JSONResponse:
+    status_code, error_code, message = _classify_chat_error(exc)
+    return JSONResponse(
+        status_code=status_code,
+        content=ChatErrorResponse(error=error_code, message=message, request_id=request_id).model_dump(),
+    )
+
+
+def _stream_error_event(exc: Exception, request_id: str) -> str:
+    _, error_code, message = _classify_chat_error(exc)
+    payload = ChatErrorResponse(error=error_code, message=message, request_id=request_id).model_dump()
+    return f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @router.get("/chat/sessions")
@@ -233,6 +272,7 @@ async def upsert_session_participants(
 
 @router.post("/chat/ask")
 async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional[str] = Header(default=None), db: Session = Depends(get_db)):
+    request_id = _new_request_id()
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question is required")
 
@@ -334,9 +374,19 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
         "world_id": request.world_id,
         "lore_keys": lore_keys,
     }
+    logger.info(
+        "chat.ask.start request_id=%s session_id=%s user=%s selected_model=%s selected_speaker=%s stream=%s",
+        request_id,
+        session.id,
+        username,
+        selection.model,
+        selected_speaker_id or request.character_id,
+        request.stream,
+    )
 
     async def stream_generator():
         started = time.time()
+        assistant_id: Optional[int] = None
         try:
             result = await app_state.orchestrator.run_agent(
                 user_input=request.question,
@@ -353,7 +403,7 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
 
             full = result.answer or ""
             for i in range(0, len(full), 200):
-                yield f"data: {json.dumps({'chunk': full[i:i+200]}, ensure_ascii=False)}\\n\\n"
+                yield f"event: chunk\ndata: {json.dumps({'chunk': full[i:i+200], 'request_id': request_id}, ensure_ascii=False)}\n\n"
 
             elapsed_ms = int((time.time() - started) * 1000)
             assistant = ChatMessage(
@@ -368,6 +418,7 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
             db.add(assistant)
             db.commit()
             db.refresh(assistant)
+            assistant_id = assistant.id
             if memory_promotion_enabled:
                 memory_promotion_service.promote_from_text(user_speaker_id, request.question)
                 if selected_speaker_id:
@@ -390,10 +441,26 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
                     "mode": selection.mode,
                     "source": selection.source,
                 },
+                "request_id": request_id,
             }
-            yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\\n\\n"
+            logger.info(
+                "chat.ask.end request_id=%s session_id=%s message_id=%s success=true latency_ms=%s",
+                request_id,
+                session.id,
+                assistant_id,
+                elapsed_ms,
+            )
+            yield f"event: done\ndata: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': True, 'message': str(e)}, ensure_ascii=False)}\\n\\n"
+            elapsed_ms = int((time.time() - started) * 1000)
+            logger.exception(
+                "chat.ask.error request_id=%s session_id=%s latency_ms=%s error=%s",
+                request_id,
+                session.id,
+                elapsed_ms,
+                str(e),
+            )
+            yield _stream_error_event(e, request_id)
         finally:
             await app_state.orchestrator.request_state_change(SystemState.IDLE, reason="chat ask done")
 
@@ -432,6 +499,13 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
             memory_promotion_service.promote_from_text(user_speaker_id, request.question)
             if selected_speaker_id:
                 memory_promotion_service.promote_from_text(selected_speaker_id, result.answer or "")
+        logger.info(
+            "chat.ask.end request_id=%s session_id=%s message_id=%s success=true latency_ms=%s",
+            request_id,
+            session.id,
+            assistant.id,
+            elapsed_ms,
+        )
         return {
             "response": result.answer,
             "session_id": session.id,
@@ -449,6 +523,17 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
                 "mode": selection.mode,
                 "source": selection.source,
             },
+            "request_id": request_id,
         }
+    except Exception as e:
+        elapsed_ms = int((time.time() - started) * 1000)
+        logger.exception(
+            "chat.ask.error request_id=%s session_id=%s latency_ms=%s error=%s",
+            request_id,
+            session.id,
+            elapsed_ms,
+            str(e),
+        )
+        return _non_stream_error_response(e, request_id)
     finally:
         await app_state.orchestrator.request_state_change(SystemState.IDLE, reason="chat ask done")

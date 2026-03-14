@@ -138,6 +138,29 @@ non-stream 예시:
   - 디버깅 및 QA 용도
   - 응답에 `rp_debug` 포함
 
+RP 생성 안정화 정책:
+
+- RP 생성 요청은 Ollama chat 경로에서 `think=false`를 사용해 `message.content`에 최종 답변이 직접 들어가도록 유도합니다.
+- runtime retry 정책은 `agent_brain`에만 둡니다.
+- 최대 체인:
+  - main generation 1회
+  - 필요 시 repair generation 1회
+  - `audience=admin`에서만 fallback
+- `llm_service`는 empty-content safe retry를 수행하지 않습니다.
+- repair 프롬프트는 최종 출력 전용으로 짧게 유지합니다.
+  - 짧은 서술 1문단
+  - 따옴표 대사 1줄
+  - 코드블록 / JSON / 메타 텍스트 / 분석 금지
+
+출력 salvage:
+
+- assistant 출력에서 다음 오염을 repair 전에 정리합니다.
+  - `<|im_start|>`, `<|im_end|>`, `<|endoftext|>`
+  - fenced code block
+  - JSON-like RP 출력
+- `action` / `narration` / `dialogue` / `speech` / `line` 필드가 있으면 RP 텍스트로 복원합니다.
+- 복원 가능한 경우 repair 없이 first-pass validation으로 바로 통과시킵니다.
+
 non-stream 성공 응답 주요 필드:
 
 - `response`
@@ -235,6 +258,38 @@ active character 기준으로 scene participant와의 관계를 조회해서 pro
 - 관계 톤
 - boundary
 - shared memory
+
+### 6. RP QA Verification
+
+QA 스모크:
+
+```bash
+python scripts/rp_qa_smoke.py --max-scenarios 3 --audience admin
+```
+
+로그에서 확인할 항목:
+
+- `llm.chat.response`
+  - `content_len > 0`
+  - `thinking_len = 0`
+  - `thinking_only=False`
+- `rp.output.first_pass_valid`
+  - repair 없이 통과한 경우
+- `rp.output.repair_pass_valid`
+  - 1회 repair로 복구된 경우
+- `rp.output.fallback_used`
+  - `audience=admin`에서만 허용
+
+현재 QA 기준:
+
+- `fallback_used = false` 이고 `validator_passed = true` 이면 `PASS`
+- `fallback_used = true` 이면 `FAIL`
+- `audience=user`에서 validator 실패로 명시적 실패 반환 시 `FAIL`
+
+검증 예시:
+
+- fenced JSON + trailing token 출력이 와도 sanitize 후 1회 호출만으로 통과 가능
+- smoke 실행 시 request latency는 repair 미사용 케이스에서 대체로 1초대, repair 사용 시 2초대 수준으로 확인
 
 ## 주요 API
 

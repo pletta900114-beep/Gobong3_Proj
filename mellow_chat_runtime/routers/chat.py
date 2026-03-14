@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -29,6 +30,7 @@ from mellow_chat_runtime.infra.database import (
 )
 from mellow_chat_runtime.services.memory_promotion_service import MemoryPromotionService
 from mellow_chat_runtime.services.model_routing_service import ModelRoutingService
+from mellow_chat_runtime.services.vector_retrieval_service import RetrievalQueryContext, VectorRetrievalService
 
 router = APIRouter(tags=['Chat'])
 model_router = ModelRoutingService(default_provider='ollama')
@@ -132,6 +134,22 @@ def _new_request_id() -> str:
     return f'chat_{uuid.uuid4().hex[:10]}'
 
 
+def _vector_service() -> Optional[VectorRetrievalService]:
+    service = getattr(app_state, 'vector_retrieval_service', None)
+    if service is not None:
+        return service
+    settings = app_state.settings
+    if settings is None:
+        return None
+    domain_store = get_domain_store(data_path=getattr(settings, 'domain_data_file', None))
+    service = VectorRetrievalService(
+        domain_store=domain_store,
+        index_path=getattr(settings, 'vector_index_file', Path('./mellow_chat_runtime_data/vector_index.json')),
+    )
+    app_state.vector_retrieval_service = service
+    return service
+
+
 def _classify_chat_error(exc: Exception) -> tuple[int, str, str]:
     if isinstance(exc, HTTPException):
         detail = exc.detail if isinstance(exc.detail, str) else 'request_failed'
@@ -186,6 +204,109 @@ def _build_sanitized_history(rows: List[ChatMessage], max_items: int = 8) -> Lis
             continue
         out.append({'role': row.role, 'content': content})
     return out
+
+
+def _build_retrieval_query(
+    question: str,
+    active_speaker_id: str,
+    participant_ids: List[str],
+    history: List[Dict[str, str]],
+    scene_state: Dict[str, Any],
+    lore_keys: List[str],
+) -> str:
+    history_lines = [
+        f"{item.get('role', 'user')}: {item.get('content', '')}"
+        for item in history[-4:]
+        if str(item.get('content', '')).strip()
+    ]
+    parts = [
+        question.strip(),
+        f"active_speaker={active_speaker_id}",
+        f"participants={','.join(participant_ids)}",
+        f"scene_goal={scene_state.get('goal', '')}",
+        f"scene_mood={scene_state.get('mood', '')}",
+    ]
+    if lore_keys:
+        parts.append(f"lore_topics={','.join(lore_keys)}")
+    if history_lines:
+        parts.append("recent_turns=" + " | ".join(history_lines))
+    return "\n".join(part for part in parts if part)
+
+
+def _extract_hit_ids(items: Any) -> List[str]:
+    if not isinstance(items, list):
+        return []
+    hit_ids: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_id = item.get('id') or item.get('source_id')
+        if not raw_id and item.get('character_id') and item.get('target_id'):
+            raw_id = f"{item.get('character_id')}:{item.get('target_id')}"
+        if not raw_id and item.get('character_id'):
+            raw_id = item.get('character_id')
+        cleaned = str(raw_id or '').strip()
+        if cleaned:
+            hit_ids.append(cleaned)
+    return hit_ids
+
+
+def _normalize_retrieval_source(source: Any, hit_ids: List[str]) -> str:
+    cleaned = str(source or '').strip().lower()
+    if cleaned == 'vector':
+        return 'vector'
+    if cleaned in {'canonical', 'fallback'}:
+        return cleaned
+    if hit_ids:
+        return 'canonical'
+    return 'none'
+
+
+def _extract_score_map(items: Any) -> Dict[str, float]:
+    if not isinstance(items, list):
+        return {}
+    out: Dict[str, float] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_id = item.get('id') or item.get('source_id')
+        if not raw_id and item.get('character_id') and item.get('target_id'):
+            raw_id = f"{item.get('character_id')}:{item.get('target_id')}"
+        if not raw_id and item.get('character_id'):
+            raw_id = item.get('character_id')
+        cleaned = str(raw_id or '').strip()
+        if not cleaned:
+            continue
+        raw_score = item.get('score')
+        if raw_score is None:
+            continue
+        try:
+            out[cleaned] = float(raw_score)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _build_retrieval_debug_payload(query: str, retrieval_context: Dict[str, Any]) -> Dict[str, Any]:
+    debug = retrieval_context.get('debug', {}) if isinstance(retrieval_context.get('debug'), dict) else {}
+    lore_hit_ids = _extract_hit_ids(retrieval_context.get('lore', []))
+    memory_hit_ids = _extract_hit_ids(retrieval_context.get('memories', []))
+    relationship_hit_ids = _extract_hit_ids(retrieval_context.get('relationships', []))
+    errors = [str(item).strip() for item in debug.get('errors', []) if str(item).strip()]
+    return {
+        'query': query,
+        'lore_source': _normalize_retrieval_source(debug.get('lore_source'), lore_hit_ids),
+        'memory_source': _normalize_retrieval_source(debug.get('memory_source'), memory_hit_ids),
+        'relationship_source': _normalize_retrieval_source(debug.get('relationship_source'), relationship_hit_ids),
+        'lore_hit_ids': lore_hit_ids,
+        'memory_hit_ids': memory_hit_ids,
+        'relationship_hit_ids': relationship_hit_ids,
+        'lore_scores': _extract_score_map(retrieval_context.get('lore', [])),
+        'memory_scores': _extract_score_map(retrieval_context.get('memories', [])),
+        'relationship_scores': _extract_score_map(retrieval_context.get('relationships', [])),
+        'errors': errors,
+        'fallback_used': bool(debug.get('fallback_used', False)),
+    }
 
 
 def _list_known_characters(domain_store: Any) -> List[Dict[str, Any]]:
@@ -449,9 +570,49 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
         started = time.time()
         assistant_id: Optional[int] = None
         try:
+            retrieval_context: Dict[str, Any] = {}
+            retrieval_service = _vector_service()
+            retrieval_query = _build_retrieval_query(
+                question=request.question,
+                active_speaker_id=selected_speaker_id or request.character_id,
+                participant_ids=active_character_ids,
+                history=history,
+                scene_state=scene_state if isinstance(scene_state, dict) else {},
+                lore_keys=lore_keys,
+            )
+            if retrieval_service is not None:
+                try:
+                    retrieval_context = retrieval_service.build_context(
+                        RetrievalQueryContext(
+                            query=retrieval_query,
+                            active_speaker_id=selected_speaker_id or request.character_id,
+                            participant_ids=active_character_ids,
+                            lore_topics=lore_keys,
+                        )
+                    )
+                except Exception as exc:
+                    retrieval_context = {
+                        'lore': [],
+                        'memories': [],
+                        'relationships': [],
+                        'debug': {
+                            'fallback_used': True,
+                            'errors': [str(exc)],
+                        },
+                    }
+                    logger.warning('chat.ask.retrieval_error request_id=%s session_id=%s error=%s', request_id, session.id, exc)
+                if retrieval_context.get('debug', {}).get('fallback_used'):
+                    logger.info(
+                        'chat.ask.retrieval_fallback request_id=%s session_id=%s debug=%s',
+                        request_id,
+                        session.id,
+                        json.dumps(retrieval_context.get('debug', {}), ensure_ascii=False),
+                    )
+            retrieval_debug = _build_retrieval_debug_payload(retrieval_query, retrieval_context)
             result = await app_state.orchestrator.run_agent(
                 user_input=request.question,
                 history=history,
+                retrieval_context=retrieval_context,
                 mode=request.mode,
                 persona_id=request.persona_id,
                 user_profile_id=request.user_profile_id,
@@ -512,6 +673,8 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
                 'request_id': request_id,
             }
             if request.audience == 'admin':
+                done_payload['retrieval_debug'] = retrieval_debug
+            if request.audience == 'admin':
                 done_payload['rp_debug'] = {
                     'validator_passed': result.validator_passed,
                     'fallback_used': result.fallback_used,
@@ -545,9 +708,49 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
 
     started = time.time()
     try:
+        retrieval_context: Dict[str, Any] = {}
+        retrieval_service = _vector_service()
+        retrieval_query = _build_retrieval_query(
+            question=request.question,
+            active_speaker_id=selected_speaker_id or request.character_id,
+            participant_ids=active_character_ids,
+            history=history,
+            scene_state=scene_state if isinstance(scene_state, dict) else {},
+            lore_keys=lore_keys,
+        )
+        if retrieval_service is not None:
+            try:
+                retrieval_context = retrieval_service.build_context(
+                    RetrievalQueryContext(
+                        query=retrieval_query,
+                        active_speaker_id=selected_speaker_id or request.character_id,
+                        participant_ids=active_character_ids,
+                        lore_topics=lore_keys,
+                    )
+                )
+            except Exception as exc:
+                retrieval_context = {
+                    'lore': [],
+                    'memories': [],
+                    'relationships': [],
+                    'debug': {
+                        'fallback_used': True,
+                        'errors': [str(exc)],
+                    },
+                }
+                logger.warning('chat.ask.retrieval_error request_id=%s session_id=%s error=%s', request_id, session.id, exc)
+            if retrieval_context.get('debug', {}).get('fallback_used'):
+                logger.info(
+                    'chat.ask.retrieval_fallback request_id=%s session_id=%s debug=%s',
+                    request_id,
+                    session.id,
+                    json.dumps(retrieval_context.get('debug', {}), ensure_ascii=False),
+                )
+        retrieval_debug = _build_retrieval_debug_payload(retrieval_query, retrieval_context)
         result = await app_state.orchestrator.run_agent(
             user_input=request.question,
             history=history,
+            retrieval_context=retrieval_context,
             mode=request.mode,
             persona_id=request.persona_id,
             user_profile_id=request.user_profile_id,
@@ -615,6 +818,8 @@ async def chat_ask(request: ChatRequest, http_request: Request, x_user: Optional
             },
             'request_id': request_id,
         }
+        if request.audience == 'admin':
+            response_payload['retrieval_debug'] = retrieval_debug
         if request.audience == 'admin':
             response_payload['rp_debug'] = {
                 'validator_passed': result.validator_passed,

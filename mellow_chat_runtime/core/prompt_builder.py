@@ -108,11 +108,13 @@ def build_user_prompt(
     history: Optional[List[Dict[str, str]]] = None,
     scene_event: Optional[ParsedSceneEvent] = None,
     target_character_hint: Optional[str] = None,
+    retrieval_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     parts: List[str] = []
     primary_language = _detect_primary_language(scene_event.raw_text if scene_event is not None else user_text)
     language_label = '한국어' if primary_language == 'ko' else '영어' if primary_language == 'en' else '입력과 동일한 언어'
     relationships = relationships or []
+    retrieval_context = retrieval_context or {}
     prioritized_memories = memories.get('important_memories', []) if isinstance(memories, dict) else []
     if not isinstance(prioritized_memories, list):
         prioritized_memories = []
@@ -145,6 +147,38 @@ def build_user_prompt(
             f'대상 힌트: {target_character_hint or scene_event.target_character_hint or "(없음)"}'
         )
 
+    retrieved_relationships = retrieval_context.get('relationships', []) if isinstance(retrieval_context.get('relationships'), list) else []
+    retrieved_memories = retrieval_context.get('memories', []) if isinstance(retrieval_context.get('memories'), list) else []
+    retrieved_lore = retrieval_context.get('lore', []) if isinstance(retrieval_context.get('lore'), list) else []
+    retrieval_lines: List[str] = []
+    if retrieved_relationships:
+        retrieval_lines.append(
+            '5. relationship summaries:\n' +
+            '\n'.join(
+                f'- {item.get("target_id", "unknown")}: {item.get("summary_text") or item.get("summary", "")}'
+                for item in retrieved_relationships[:2]
+                if str(item.get("summary_text") or item.get("summary", "")).strip()
+            )
+        )
+    if retrieved_memories:
+        retrieval_lines.append(
+            '6. important memories:\n' +
+            '\n'.join(
+                f'- {item.get("character_id", "unknown")}: {item.get("summary_text", "")}'
+                for item in retrieved_memories[:4]
+                if str(item.get("summary_text", "")).strip()
+            )
+        )
+    if retrieved_lore:
+        retrieval_lines.append(
+            '7. lore support:\n' +
+            '\n'.join(
+                f'- {item.get("topic", item.get("id", "unknown"))}: {item.get("summary_text", item.get("content", ""))}'
+                for item in retrieved_lore[:3]
+                if str(item.get("summary_text", item.get("content", ""))).strip()
+            )
+        )
+
     parts.append(
         '출력 제약:\n'
         f'- 응답 주 언어: {language_label}\n'
@@ -160,6 +194,16 @@ def build_user_prompt(
         f'관계 맥락: {json.dumps(relationship_summary, ensure_ascii=False)}\n'
         f'로어 참고: {json.dumps(lore, ensure_ascii=False)}'
     )
+    if retrieval_lines:
+        parts.append(
+            '검색 보조 맥락 우선순위:\n'
+            '1. scene rules / goal\n'
+            '2. world continuity\n'
+            '3. active speaker constraints\n'
+            '4. structured relationship constraints\n'
+            + '\n'.join(retrieval_lines)
+            + '\n8. recent history'
+        )
     parts.append('사용자 프로필:\n' + json.dumps(user_profile, ensure_ascii=False))
     parts.append('현재 사용자 메시지:\n' + user_text)
     return '\n\n'.join(parts)

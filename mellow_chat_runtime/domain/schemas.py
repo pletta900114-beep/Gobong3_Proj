@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,8 @@ class LorebookEntry(BaseModel):
     aliases: List[str] = Field(default_factory=list)
     content: str
     priority: int = 0
+    summary_text: Optional[str] = None
+    embedding_status: Optional[Literal["pending", "dirty", "ready", "failed"]] = None
 
 
 class SceneRule(BaseModel):
@@ -65,6 +67,8 @@ class MemoryPossession(BaseModel):
     character_id: str
     important_memories: List[str] = Field(default_factory=list)
     possessions: List[str] = Field(default_factory=list)
+    summary_text: Optional[str] = None
+    embedding_status: Optional[Literal["pending", "dirty", "ready", "failed"]] = None
 
 
 class RelationshipContext(BaseModel):
@@ -73,6 +77,8 @@ class RelationshipContext(BaseModel):
     tone: str = "neutral"
     boundaries: List[str] = Field(default_factory=list)
     shared_memories: List[str] = Field(default_factory=list)
+    summary_text: Optional[str] = None
+    embedding_status: Optional[Literal["pending", "dirty", "ready", "failed"]] = None
 
 
 class DialoguePriority(BaseModel):
@@ -95,3 +101,5 @@ class DomainDataBundle(BaseModel):
     relationships: Dict[str, Dict[str, RelationshipContext]] = Field(default_factory=dict)
     dialogue_priority: Dict[str, DialoguePriority] = Field(default_factory=dict)
     user_profiles: Dict[str, Dict[str, Optional[str]]] = Field(default_factory=dict)
+
+

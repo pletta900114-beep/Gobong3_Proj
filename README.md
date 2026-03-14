@@ -5,6 +5,7 @@
 현재 범위는 다음까지 포함합니다.
 
 - 채팅 세션 기반 `/chat/ask` 런타임
+- canonical domain store + vector index 보조 검색층
 - active character prompt injection
 - recent history 재사용
 - multi-character speaker selection
@@ -38,7 +39,7 @@
 - `mellow_chat_runtime/`
   - FastAPI 앱, 라우터, 오케스트레이터, 프롬프트/도메인 로직
 - `mellow_chat_runtime_data/`
-  - SQLite DB, 런타임 도메인 데이터 파일
+  - SQLite DB, canonical 도메인 데이터 파일, vector index 파일
 - `tests/`
   - 통합 테스트 포함
 - `service_backend_design_for_codex.md`
@@ -83,9 +84,9 @@ THINKING_MODEL=qwen3.5:9b
 RESEARCH_MODEL=qwen3.5:9b
 
 DOMAIN_LOOKUP_BACKEND=json
-# DOMAIN_LOOKUP_BACKEND=vector
 # VECTORDB_LORE_SEARCH_URL=http://localhost:9000/lore/search
 # VECTORDB_TIMEOUT_SEC=2.0
+VECTOR_INDEX_FILE=./mellow_chat_runtime_data/vector_index.json
 
 MEMORY_PROMOTION_ENABLED=true
 MEMORY_PROMOTION_MAX_ITEMS=20
@@ -137,6 +138,7 @@ non-stream 예시:
   - retry / repair / fallback / 상세 판정 정보 유지
   - 디버깅 및 QA 용도
   - 응답에 `rp_debug` 포함
+  - 응답에 `retrieval_debug` 포함
 
 RP 생성 안정화 정책:
 
@@ -177,6 +179,14 @@ non-stream 성공 응답 주요 필드:
 
 `audience=admin` 추가 필드:
 
+- `retrieval_debug.query`
+- `retrieval_debug.lore_source`
+- `retrieval_debug.memory_source`
+- `retrieval_debug.relationship_source`
+- `retrieval_debug.lore_hit_ids`
+- `retrieval_debug.memory_hit_ids`
+- `retrieval_debug.relationship_hit_ids`
+- `retrieval_debug.errors`
 - `rp_debug.validator_passed`
 - `rp_debug.fallback_used`
 - `rp_debug.retry_count`
@@ -247,6 +257,18 @@ stream 응답 특성:
   - generation prompt에서 중요한 메모리 상위 항목을 사용
 - memory promotion
   - 중요 문장을 감지해 `important_memories`로 승격
+
+### 4.1 Canonical Store / Vector Index
+
+- canonical store는 source of truth입니다.
+  - session / message / participants / model selection / request log는 SQLite에 유지됩니다.
+  - user profile / character profile / scene / world / lore / memory / relationship canonical payload는 domain JSON에 유지됩니다.
+- vector index는 보조 검색층입니다.
+  - 검색 가속과 관련 context 후보 추출만 담당합니다.
+  - canonical structured field를 덮어쓰지 않습니다.
+- lore / memory / relationship canonical payload에는 `summary_text`와 `embedding_status`가 함께 저장됩니다.
+  - admin 수정 후 searchable field가 바뀌면 `embedding_status=dirty`
+  - reindex 완료 후 현재 상태 전이 용어는 `dirty -> clean`
 
 ### 5. Relationship Context
 
@@ -328,6 +350,7 @@ python scripts/rp_qa_smoke.py --max-scenarios 3 --audience admin
 - `PUT /admin/relationships`
 - `GET /admin/lore/{lore_id}`
 - `PUT /admin/lore/{lore_id}`
+- `POST /admin/vector/reindex`
 
 ## 데이터 파일
 
@@ -335,6 +358,8 @@ python scripts/rp_qa_smoke.py --max-scenarios 3 --audience admin
   - `mellow_chat_runtime_data/chatbot.db`
 - 런타임 도메인 데이터
   - `mellow_chat_runtime_data/domain_data.json`
+- vector index
+  - `mellow_chat_runtime_data/vector_index.json`
 - 시드 예시
   - `mellow_chat_runtime_data/domain_data.seed.json`
 
@@ -346,9 +371,17 @@ python scripts/rp_qa_smoke.py --max-scenarios 3 --audience admin
 pytest -q
 ```
 
+테스트 DB 정책:
+
+- 운영 DB는 그대로 두고, `pytest` 실행 시에만 fixture 기반 DB override가 적용됩니다.
+- 테스트는 각 케이스마다 별도 SQLite test DB를 사용합니다.
+- 따라서 운영용 `mellow_chat_runtime_data/chatbot.db`를 테스트가 직접 공유하지 않습니다.
+
 현재 포함 테스트 범위:
 
 - memory promotion
+- vector retrieval / reindex smoke
+- retrieval scoring QA scenarios
 - `/chat/ask` non-stream success
 - `/chat/ask` stream success
 - `/chat/ask` failure path
@@ -357,6 +390,25 @@ pytest -q
 - relationship context prompt injection
 - long-term memory prompt usage
 - admin API flow
+
+retrieval scoring QA 테스트만 따로 실행:
+
+```bash
+pytest -q test_retrieval_reranker.py
+```
+
+전체 테스트와 함께 확인:
+
+```bash
+pytest -q
+```
+
+retrieval scoring QA에서 확인하는 항목:
+
+- active speaker가 바뀌면 memory ranking이 바뀌는지
+- participant 조합이 바뀌면 relationship ranking이 바뀌는지
+- `lore_topics` 제공 시 exact topic / alias lore가 우선되는지
+- unrelated hit가 threshold 아래로 떨어져 최종 prompt 주입에서 제외되는지
 
 QA 스모크 실행 예시:
 

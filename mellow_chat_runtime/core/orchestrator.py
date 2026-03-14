@@ -71,6 +71,7 @@ class Orchestrator:
         self,
         user_input: str,
         history: Optional[list] = None,
+        retrieval_context: Optional[Dict[str, Any]] = None,
         mode: str = 'fast',
         selected_model: Optional[str] = None,
         persona_id: str = 'default',
@@ -92,6 +93,7 @@ class Orchestrator:
             return await self.agent.run(
                 user_input=user_input,
                 context=history or [],
+                retrieval_context=retrieval_context or {},
                 persona_id=persona_id,
                 user_profile_id=user_profile_id,
                 lore_topic=lore_topic,

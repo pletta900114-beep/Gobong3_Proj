@@ -66,6 +66,14 @@ class MessageFeedback(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+def configure_database(database_url: str) -> None:
+    global engine, DATABASE_URL
+    DATABASE_URL = database_url
+    engine.dispose()
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    SessionLocal.configure(bind=engine)
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_chat_session_columns()

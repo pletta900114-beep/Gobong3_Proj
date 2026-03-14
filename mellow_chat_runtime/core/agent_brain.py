@@ -90,6 +90,7 @@ class AgentBrain:
         self,
         user_input: str,
         context: Optional[List[Dict[str, str]]] = None,
+        retrieval_context: Optional[Dict[str, Any]] = None,
         persona_id: str = 'default',
         user_profile_id: str = 'default',
         lore_topic: str = 'default',
@@ -105,6 +106,7 @@ class AgentBrain:
     ) -> AgentResult:
         steps: List[AgentStep] = []
         history = self._trim_history(self._sanitize_history(context or []))
+        retrieval_context = retrieval_context or {}
 
         persona = self._lookup.execute('lookup_persona', {'persona_id': persona_id}).payload
         user_profile = self._lookup.execute('lookup_user_profile', {'profile_id': user_profile_id}).payload
@@ -143,6 +145,7 @@ class AgentBrain:
                     'dialogue_priority': dialogue_priority,
                     'active_character': active_character,
                     'relationships': relationships,
+                    'retrieval_context': retrieval_context,
                     'scene_event': scene_event.__dict__ if scene_event else {},
                 }),
             )
@@ -165,6 +168,7 @@ class AgentBrain:
             history=history,
             scene_event=scene_event,
             target_character_hint=target_character_hint,
+            retrieval_context=retrieval_context,
         )
 
         resolved_model = selected_model or self._llm.get_model_for_mode(mode)

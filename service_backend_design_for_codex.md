@@ -80,6 +80,8 @@ _대상: Codex 참고용 / 웹서비스 연동 전제 / 캐릭터 대화 엔진 
   - DomainLookupDispatcher
   ↓
 [Domain Data Layer]
+  - canonical domain store (source of truth)
+  - vector index (support retrieval only)
   - user characters
   - bot characters
   - lorebook
@@ -96,7 +98,8 @@ _대상: Codex 참고용 / 웹서비스 연동 전제 / 캐릭터 대화 엔진 
   ↓
 [Persistence Layer]
   - chat/session db
-  - domain store
+  - canonical domain store
+  - vector index store
   - config store
 ```
 
@@ -230,7 +233,9 @@ mellow_chat_runtime_data/
   "topic": "스타피스 컴퍼니",
   "aliases": ["IPC", "Interastral Peace Corporation"],
   "content": "......",
-  "priority": 10
+  "priority": 10,
+  "summary_text": "......",
+  "embedding_status": "dirty"
 }
 ```
 
@@ -251,7 +256,22 @@ mellow_chat_runtime_data/
 {
   "character_id": "user_char_01",
   "important_memories": ["과거 프로젝트 사건", "관계 변화"],
-  "possessions": ["카드 케이스", "메모장"]
+  "possessions": ["카드 케이스", "메모장"],
+  "summary_text": "과거 프로젝트 사건 | 관계 변화",
+  "embedding_status": "dirty"
+}
+```
+
+## 5.8 Relationship Context
+```json
+{
+  "target_id": "bot_char_01",
+  "summary": "신뢰 가능한 협업 상대",
+  "tone": "warmly strategic",
+  "boundaries": ["기존 합의를 함부로 무시하지 않음"],
+  "shared_memories": ["긴장된 협상을 함께 안정시켰다"],
+  "summary_text": "신뢰 가능한 협업 상대 | warmly strategic | 긴장된 협상을 함께 안정시켰다",
+  "embedding_status": "dirty"
 }
 ```
 
@@ -336,6 +356,9 @@ mellow_chat_runtime_data/
 - 파일시스템 수정 없음
 - 외부 셸 실행 없음
 - 내부 저장소 조회만 허용
+- canonical store가 source of truth
+- vector index는 lore / memory / relationship에 대한 보조 검색층
+- reindex 상태 전이 용어는 현재 `dirty -> clean`
 
 ---
 
@@ -350,9 +373,13 @@ User message 저장
   ↓
 ModelRoutingService가 모델 결정
   ↓
-Scene/Character/Lore/Memory 조회
+Scene/Character/Lore/Memory canonical 조회
   ↓
 SpeakerSelector가 발화자 결정
+  ↓
+Vector retrieval이 lore / memory / relationship 보조 컨텍스트 조회
+  - 실패 시 canonical fallback
+  - admin audience에서는 retrieval_debug로 source / hit ids / errors 노출
   ↓
 PromptBuilder가 최종 프롬프트 조합
   ↓
@@ -425,6 +452,23 @@ Assistant message 저장
 }
 ```
 
+`audience=admin` 응답에는 아래 retrieval debug가 추가될 수 있다.
+
+```json
+{
+  "retrieval_debug": {
+    "query": "원문 질문 + active speaker + participants + scene goal/mood + recent turns",
+    "lore_source": "vector",
+    "memory_source": "canonical",
+    "relationship_source": "none",
+    "lore_hit_ids": ["lore_001"],
+    "memory_hit_ids": ["bot_char_01:0"],
+    "relationship_hit_ids": [],
+    "errors": []
+  }
+}
+```
+
 ## 10.6 Model Selection
 `POST /models/select`
 
@@ -446,6 +490,13 @@ Assistant message 저장
   "bot_character_ids": ["bot_char_01", "bot_char_02"]
 }
 ```
+
+## 10.8 Vector Reindex
+`POST /admin/vector/reindex`
+
+현재 구현은 lore / memory / relationship canonical payload를 재요약하고,
+vector index를 다시 만들며,
+canonical `embedding_status`를 `dirty -> clean`으로 갱신한다.
 
 ---
 
@@ -471,6 +522,10 @@ Assistant message 저장
 - 웹 프론트 통합
 - 사용자 설정 UI
 - 운영 로그 / admin 기능
+
+### 테스트 메모
+- pytest 실행 시에는 fixture 기반 test DB override를 사용한다.
+- 운영 DB는 테스트 중 source of truth 검증 대상이 아니며, 각 테스트는 별도 SQLite test DB를 사용한다.
 
 ---
 

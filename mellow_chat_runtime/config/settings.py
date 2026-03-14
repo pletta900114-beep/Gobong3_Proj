@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     data_dir: Path = Field(default=Path("./mellow_chat_runtime_data"))
     domain_data_file: Path = Field(default=Path("./mellow_chat_runtime_data/domain_data.json"))
+    vector_index_file: Path = Field(default=Path("./mellow_chat_runtime_data/vector_index.json"))
     domain_lookup_backend: str = Field(default="json")
     vectordb_lore_search_url: Optional[str] = Field(default=None)
     vectordb_timeout_sec: float = Field(default=2.0)

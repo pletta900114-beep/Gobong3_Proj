@@ -17,6 +17,7 @@ from mellow_chat_runtime.routers.chat import router as chat_router
 from mellow_chat_runtime.routers.models import router as model_router
 from mellow_chat_runtime.routers.runtime import router as runtime_router
 from mellow_chat_runtime.services.llm_service import create_llm_service
+from mellow_chat_runtime.services.vector_retrieval_service import VectorRetrievalService
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,13 @@ async def startup() -> None:
 
     domain_store = get_domain_store(
         data_path=settings.domain_data_file,
-        backend=settings.domain_lookup_backend,
+        backend="json",
         vectordb_lore_search_url=settings.vectordb_lore_search_url,
         vectordb_timeout_sec=settings.vectordb_timeout_sec,
+    )
+    vector_retrieval_service = VectorRetrievalService(
+        domain_store=domain_store,
+        index_path=settings.vector_index_file,
     )
     dispatcher = DomainLookupDispatcher(domain_store)
 
@@ -60,6 +65,7 @@ async def startup() -> None:
 
     app_state.llm_service = llm
     app_state.orchestrator = orchestrator
+    app_state.vector_retrieval_service = vector_retrieval_service
 
     logger.info("mellow_chat_runtime startup complete")
 
@@ -69,6 +75,7 @@ async def shutdown() -> None:
         await app_state.orchestrator.shutdown()
     app_state.orchestrator = None
     app_state.llm_service = None
+    app_state.vector_retrieval_service = None
 
 
 @asynccontextmanager

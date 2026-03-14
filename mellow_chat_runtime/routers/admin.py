@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from mellow_chat_runtime import app_state
 from mellow_chat_runtime.core.domain_lookup_store import get_domain_store
+from mellow_chat_runtime.services.summary_formatter import prepare_searchable_payload
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -39,6 +40,23 @@ def _store():
     settings = app_state.settings
     data_path = getattr(settings, "domain_data_file", None) if settings else None
     return get_domain_store(data_path=data_path)
+
+
+def _vector_service():
+    return getattr(app_state, "vector_retrieval_service", None)
+
+
+def _prepare_searchable_upsert(
+    section: str,
+    key: str,
+    payload: Dict[str, Any],
+    existing: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    updated = dict(payload)
+    vector_service = _vector_service()
+    if vector_service is not None:
+        updated = vector_service.mark_dirty_if_needed(section, key, updated, existing=existing)
+    return prepare_searchable_payload(section, key, updated)
 
 
 @router.get("/characters")
@@ -94,7 +112,7 @@ async def upsert_memory(character_id: str, request: MemoryUpsertRequest) -> Dict
     store = _store()
     payload = dict(request.data)
     payload["character_id"] = character_id
-    store.upsert("memories", character_id, payload)
+    store.upsert("memories", character_id, _prepare_searchable_upsert("memories", character_id, payload))
     return {"success": True, "item": store.get_section_item("memories", character_id)}
 
 
@@ -112,7 +130,13 @@ async def upsert_relationship(request: RelationshipUpsertRequest) -> Dict[str, A
     source_map = relationship_section.get(request.source_id, {})
     if not isinstance(source_map, dict):
         source_map = {}
-    source_map[request.target_id] = {**request.data, "target_id": request.target_id}
+    existing_item = source_map.get(request.target_id, {}) if isinstance(source_map.get(request.target_id, {}), dict) else {}
+    source_map[request.target_id] = _prepare_searchable_upsert(
+        "relationships",
+        request.target_id,
+        {**request.data, "target_id": request.target_id},
+        existing=existing_item,
+    )
     store.upsert("relationships", request.source_id, source_map)
     return {"success": True, "items": store.get_relationships(request.source_id, counterpart_ids=[request.target_id])}
 
@@ -131,5 +155,13 @@ async def upsert_lore_item(lore_id: str, request: LoreUpsertRequest) -> Dict[str
     store = _store()
     payload = dict(request.data)
     payload["id"] = lore_id
-    store.upsert("lorebook", lore_id, payload)
+    store.upsert("lorebook", lore_id, _prepare_searchable_upsert("lorebook", lore_id, payload))
     return {"success": True, "item": store.get_section_item("lorebook", lore_id)}
+
+
+@router.post("/vector/reindex")
+async def reindex_vector_entries() -> Dict[str, Any]:
+    vector_service = _vector_service()
+    if vector_service is None:
+        raise HTTPException(status_code=503, detail="Vector retrieval service not initialized")
+    return {"success": True, "indexed": vector_service.reindex()}

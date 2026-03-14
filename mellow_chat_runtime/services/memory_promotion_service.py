@@ -4,6 +4,7 @@ import re
 from typing import Dict, List
 
 from mellow_chat_runtime.core.domain_lookup_store import DomainLookupStore
+from mellow_chat_runtime.services.summary_formatter import prepare_searchable_payload
 
 
 class MemoryPromotionService:
@@ -59,8 +60,9 @@ class MemoryPromotionService:
             "character_id": cleaned_character_id,
             "important_memories": merged[-self._max_items :],
             "possessions": self._clean_memory_list(memory_state.get("possessions", [])),
+            "embedding_status": "dirty",
         }
-        self._domain_store.upsert("memories", cleaned_character_id, updated_memory)
+        self._domain_store.upsert("memories", cleaned_character_id, prepare_searchable_payload("memories", cleaned_character_id, updated_memory))
         return promoted
 
     def _extract_candidates(self, text: str) -> List[str]:

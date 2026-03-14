@@ -20,7 +20,15 @@ from mellow_chat_runtime.core.text_sanitizer import (
 
 logger = logging.getLogger(__name__)
 
-_RETRY_THINKING_STOP_SEQUENCES = ('<think>', '</think>')
+_DIALOGUE_RE = re.compile(r'["“](.+?)["”]', re.DOTALL)
+_NARRATION_FIRST_PERSON_TOKENS = (
+    '내 시선',
+    '내 눈빛',
+    '내게',
+    '나를',
+    '우리의',
+    '우리',
+)
 
 
 @dataclass
@@ -71,6 +79,12 @@ class AgentBrain:
         self._lookup = lookup_dispatcher
         self._max_turns = max_turns
         self._context_window = context_window
+
+    def _rp_chat_kwargs(self, *, for_repair: bool = False) -> Dict[str, Any]:
+        options: Dict[str, Any] = {'stop': STOP_SEQUENCES}
+        if for_repair:
+            options['num_predict'] = 180
+        return {'options': options, 'think': False}
 
     async def run(
         self,
@@ -220,13 +234,13 @@ class AgentBrain:
         audience: str = 'user',
     ) -> RPGenerationOutcome:
         messages = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
-        response = await self._llm.chat(messages=messages, model=model, options={'stop': STOP_SEQUENCES})
+        response = await self._llm.chat(messages=messages, model=model, **self._rp_chat_kwargs())
         raw_answer = response.text or ''
         raw_thinking = getattr(response, 'thinking', '') or ''
         answer = sanitize_assistant_text(raw_answer)
         outcome = RPGenerationOutcome(answer=answer)
 
-        if not str(raw_answer).strip() and str(raw_thinking).strip():
+        if self._is_empty_llm_response(answer) and str(raw_thinking).strip():
             logger.warning(
                 'rp.output.thinking_only_detected request_id=%s character=%s model=%s input_mode=%s thinking_preview=%s',
                 request_id,
@@ -235,45 +249,6 @@ class AgentBrain:
                 getattr(scene_event, 'input_mode', None),
                 self._preview(raw_thinking),
             )
-            retry_answer = await self._retry_final_answer_only(
-                system_prompt=system_prompt,
-                model=model,
-                active_character=active_character,
-                request_id=request_id,
-                scene_event=scene_event,
-                expected_language=expected_language,
-                audience=audience,
-            )
-            outcome.retry_count = retry_answer.retry_count
-            if retry_answer.answer:
-                return retry_answer
-            outcome.failure_reasons = ['thinking_only_empty_content', 'retry_empty_or_invalid']
-            if audience == 'admin':
-                fallback_answer = self._fallback_rp_output(active_character)
-                logger.warning(
-                    'rp.output.fallback_used request_id=%s character=%s model=%s first_pass_reasons=%s repair_reasons=%s fallback_preview=%s',
-                    request_id,
-                    active_character.get('id') or active_character.get('name'),
-                    model,
-                    'thinking_only_empty_content',
-                    'retry_empty_or_invalid',
-                    self._preview(fallback_answer),
-                )
-                outcome.answer = fallback_answer
-                outcome.fallback_used = True
-            return outcome
-
-        if self._is_empty_llm_response(answer):
-            if not str(raw_answer).strip():
-                fallback = await self._llm.generate(
-                    prompt=user_prompt,
-                    system_prompt=system_prompt,
-                    mode=mode,
-                    options={'stop': STOP_SEQUENCES},
-                )
-                answer = sanitize_assistant_text(fallback.content or '')
-            else:
-                answer = str(raw_answer).strip()
 
         first_ok, first_reasons = self._validate_rp_output(
             answer,
@@ -304,30 +279,70 @@ class AgentBrain:
             self._preview(answer),
         )
 
+        repaired_outcome = await self._repair_rp_output(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            active_character=active_character,
+            request_id=request_id,
+            scene_event=scene_event,
+            expected_language=expected_language,
+            prior_answer=answer,
+            failure_reasons=first_reasons,
+        )
+        repaired_outcome.retry_count = 1
+        if repaired_outcome.answer:
+            return repaired_outcome
+
         if audience != 'admin':
             outcome.answer = ''
-            outcome.failure_reasons = first_reasons
+            outcome.failure_reasons = repaired_outcome.failure_reasons or first_reasons
             return outcome
 
+        fallback_answer = self._fallback_rp_output(active_character)
+        logger.warning(
+            'rp.output.fallback_used request_id=%s character=%s model=%s first_pass_reasons=%s repair_reasons=%s fallback_preview=%s',
+            request_id,
+            active_character.get('id') or active_character.get('name'),
+            model,
+            ','.join(first_reasons),
+            ','.join(repaired_outcome.failure_reasons),
+            self._preview(fallback_answer),
+        )
+        return RPGenerationOutcome(
+            answer=fallback_answer,
+            validator_passed=False,
+            fallback_used=True,
+            retry_count=1,
+            failure_reasons=repaired_outcome.failure_reasons or first_reasons,
+        )
+
+    async def _repair_rp_output(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        active_character: Dict[str, Any],
+        request_id: Optional[str],
+        scene_event: Optional[ParsedSceneEvent],
+        expected_language: Optional[str],
+        prior_answer: str,
+        failure_reasons: List[str],
+    ) -> RPGenerationOutcome:
+        scene_text = ''
+        if scene_event is not None:
+            scene_text = scene_event.raw_text or scene_event.user_dialogue or scene_event.user_narration
+        repair_instruction = self._build_repair_instruction(failure_reasons)
         repair_messages = [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
-            {'role': 'assistant', 'content': sanitize_assistant_text(answer) or str(answer).strip()},
-            {
-                'role': 'user',
-                'content': (
-                    '최종 인캐릭터 RP 답변만 다시 작성하라.\n'
-                    '짧은 서술 문단 하나와 따옴표 대사 한 줄만 출력하라.\n'
-                    '분석, 생각, 메타 설명을 쓰지 마라.\n'
-                    '사용자 입력의 주 언어를 유지하라.\n'
-                    '한국어 입력이면 서술과 대사를 모두 한국어로 유지하고 영어로 바꾸지 마라.\n'
-                    '서술은 반드시 선택된 캐릭터를 3인칭으로 묘사하라.'
-                ),
-            },
         ]
-        repaired = await self._llm.chat(messages=repair_messages, model=model, options={'stop': STOP_SEQUENCES})
+        if prior_answer.strip():
+            repair_messages.append({'role': 'assistant', 'content': prior_answer})
+        repair_messages.append({'role': 'user', 'content': f'{repair_instruction}\n장면:\n{scene_text}'.strip()})
+        repaired = await self._llm.chat(messages=repair_messages, model=model, **self._rp_chat_kwargs(for_repair=True))
         repaired_raw = repaired.text or ''
-        repaired_answer = sanitize_assistant_text(repaired_raw)
+        repaired_answer = sanitize_assistant_text(repaired.text or '')
         repaired_ok, repaired_reasons = self._validate_rp_output(
             repaired_answer,
             active_character=active_character,
@@ -339,15 +354,10 @@ class AgentBrain:
                 request_id,
                 active_character.get('id') or active_character.get('name'),
                 model,
-                ','.join(first_reasons),
+                ','.join(failure_reasons),
                 self._preview(repaired_answer),
             )
-            return RPGenerationOutcome(
-                answer=repaired_answer,
-                validator_passed=True,
-                failure_reasons=[],
-            )
-
+            return RPGenerationOutcome(answer=repaired_answer, validator_passed=True, failure_reasons=[])
         logger.warning(
             'rp.output.repair_pass_invalid request_id=%s character=%s model=%s reasons=%s raw_preview=%s sanitized_preview=%s',
             request_id,
@@ -357,110 +367,26 @@ class AgentBrain:
             self._preview(repaired_raw),
             self._preview(repaired_answer),
         )
-        fallback_answer = self._fallback_rp_output(active_character)
-        logger.warning(
-            'rp.output.fallback_used request_id=%s character=%s model=%s first_pass_reasons=%s repair_reasons=%s fallback_preview=%s',
-            request_id,
-            active_character.get('id') or active_character.get('name'),
-            model,
-            ','.join(first_reasons),
-            ','.join(repaired_reasons),
-            self._preview(fallback_answer),
-        )
-        return RPGenerationOutcome(
-            answer=fallback_answer,
-            validator_passed=False,
-            fallback_used=True,
-            failure_reasons=repaired_reasons,
-        )
+        return RPGenerationOutcome(answer='', validator_passed=False, failure_reasons=repaired_reasons or failure_reasons)
 
-    async def _retry_final_answer_only(
-        self,
-        system_prompt: str,
-        model: str,
-        active_character: Dict[str, Any],
-        request_id: Optional[str],
-        scene_event: Optional[ParsedSceneEvent],
-        expected_language: Optional[str],
-        audience: str,
-    ) -> RPGenerationOutcome:
-        scene_text = ''
-        if scene_event is not None:
-            scene_text = scene_event.raw_text or scene_event.user_dialogue or scene_event.user_narration
-        retry_prompt = (
-            '최종 답변만 출력하라.\n'
-            '생각, 분석, 메타 설명을 쓰지 마라.\n'
-            '짧은 서술 문단 하나.\n'
-            '따옴표 대사 한 줄.\n'
+    def _build_repair_instruction(self, failure_reasons: List[str]) -> str:
+        if 'narration_not_third_person' in failure_reasons:
+            return (
+                '최종 RP 답변만 다시 써라.\n'
+                '서술은 엄격한 3인칭이어야 한다.\n'
+                '서술에 내 / 나 / 내게 / 우리 / 나를 / 내 시선 / 내 눈빛을 쓰지 마라.\n'
+                '사용자는 상대 / 사용자 / 멜로우로만 가리켜라.\n'
+                '짧은 서술 한 문단과 따옴표 대사 한 줄만 출력하라.\n'
+                '코드블록, JSON, 메타 텍스트, 분석을 쓰지 마라.'
+            )
+        return (
+            '최종 RP 답변만 출력하라.\n'
+            '짧은 서술 한 문단과 따옴표 대사 한 줄만 출력하라.\n'
+            '코드블록, JSON, 메타 텍스트, 분석, 생각을 쓰지 마라.\n'
+            '빈 응답을 쓰지 마라.\n'
             '사용자 입력의 주 언어를 유지하라.\n'
-            '한국어 입력이면 서술과 대사를 모두 한국어로 유지하고 영어로 전환하지 마라.\n'
-            '서술은 반드시 선택된 캐릭터를 3인칭으로 묘사하라.\n'
-            f'사용자 장면 이벤트:\n{scene_text}'
-        ).strip()
-        retry_messages = [
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': retry_prompt},
-        ]
-        retry_stop_attempts: List[Optional[List[str]]] = [[token for token in STOP_SEQUENCES if token not in _RETRY_THINKING_STOP_SEQUENCES]]
-        if audience == 'admin':
-            retry_stop_attempts.append(None)
-
-        for attempt_index, stop_sequences in enumerate(retry_stop_attempts, start=1):
-            retry_response = await self._llm.chat(
-                messages=retry_messages,
-                model=model,
-                options=({'stop': stop_sequences} if stop_sequences is not None else {}),
-            )
-            retry_raw = retry_response.text or ''
-            retry_thinking = getattr(retry_response, 'thinking', '') or ''
-            retry_answer = sanitize_assistant_text(retry_raw)
-            retry_ok, retry_reasons = self._validate_rp_output(
-                retry_answer,
-                active_character=active_character,
-                expected_language=expected_language,
-            )
-            if retry_ok:
-                logger.info(
-                    'rp.output.final_answer_retry_valid request_id=%s character=%s model=%s attempt=%s stop_count=%s preview=%s',
-                    request_id,
-                    active_character.get('id') or active_character.get('name'),
-                    model,
-                    attempt_index,
-                    0 if stop_sequences is None else len(stop_sequences),
-                    self._preview(retry_answer),
-                )
-                return RPGenerationOutcome(
-                    answer=retry_answer,
-                    validator_passed=True,
-                    retry_count=attempt_index,
-                )
-            logger.warning(
-                'rp.output.final_answer_retry_invalid request_id=%s character=%s model=%s attempt=%s reasons=%s raw_preview=%s thinking_preview=%s sanitized_preview=%s stop_count=%s',
-                request_id,
-                active_character.get('id') or active_character.get('name'),
-                model,
-                attempt_index,
-                ','.join(retry_reasons),
-                self._preview(retry_raw),
-                self._preview(retry_thinking),
-                self._preview(retry_answer),
-                0 if stop_sequences is None else len(stop_sequences),
-            )
-            should_retry = (
-                (not str(retry_raw).strip() and str(retry_thinking).strip())
-                or 'language_drift' in retry_reasons
-            )
-            if should_retry and attempt_index < len(retry_stop_attempts):
-                continue
-            if stop_sequences is None or attempt_index >= len(retry_stop_attempts):
-                break
-            return RPGenerationOutcome(
-                answer='',
-                validator_passed=False,
-                retry_count=attempt_index,
-                failure_reasons=retry_reasons,
-            )
-        return RPGenerationOutcome(answer='', validator_passed=False, retry_count=len(retry_stop_attempts), failure_reasons=['retry_empty_or_invalid'])
+            '서술은 선택된 캐릭터의 3인칭으로만 쓴다.'
+        )
 
     def _validate_rp_output(
         self,
@@ -476,10 +402,9 @@ class AgentBrain:
             return False, ['sanitized_empty']
         if has_forbidden_output_markers(cleaned):
             reasons.append('meta_or_token_leak')
-        quote_match = re.search(r'["“].+?["”]', cleaned, re.DOTALL)
-        if not quote_match:
+        narration, dialogue = self._split_rp_sections(cleaned)
+        if not dialogue:
             reasons.append('missing_quoted_dialogue')
-        narration = re.sub(r'["“].+?["”]', '', cleaned, flags=re.DOTALL).strip()
         if not narration:
             reasons.append('missing_narration')
         if expected_language == 'ko' and self._detect_primary_language(cleaned) == 'en':
@@ -498,6 +423,11 @@ class AgentBrain:
         return ok
 
     def _fallback_rp_output(self, active_character: Dict[str, Any]) -> str:
+        character_name = str(active_character.get('name') or '').strip()
+        if character_name == 'Sunday':
+            return '선데이는 숨을 고른 뒤 흔들림 없는 시선으로 상대를 바라본다.\n\n"지금 드린 말은 가볍게 꺼낸 것이 아닙니다. 이 장면에서는 차분히, 끝까지 책임 있게 답하겠습니다."'
+        if character_name == 'Aventurine':
+            return '어벤츄린은 한쪽 입꼬리를 옅게 올린 채 판을 다시 가늠하듯 상대를 바라본다.\n\n"성급하게 판을 접을 생각은 없어. 네 판단도 포함해서, 이번 수는 끝까지 계산해 보자."'
         subject = self._fallback_subject(active_character)
         return f'{subject} 잠시 숨을 고르며 상대의 눈을 똑바로 바라본다.\n\n"지금은 서두르지 말자. 이 장면 안에서 차분히 이어가면 돼."'
 
@@ -528,7 +458,11 @@ class AgentBrain:
             return False
         if re.search(r'\b(I|my|me|mine|we|our|us)\b', text, re.IGNORECASE):
             return False
-        if re.search(r'(^|[\s(])(?:나는|난|내가|내|나를|저는|제가|저를|우리는|우린|우리가)\b', text):
+        if any(token in text for token in _NARRATION_FIRST_PERSON_TOKENS):
+            return False
+        if re.search(r'(^|[\s"“”(])(?:내|나|우리)(?=$|[\s"“”.,!?)]|\n)', text):
+            return False
+        if re.search(r'(^|[\s(])(?:나는|난|내가|나에게|저는|제가|저를|제게|우리는|우린|우리가|우리를|우리에게)\b', text):
             return False
         character_name = str((active_character or {}).get('name') or '').strip()
         third_person_markers = ['그는', '그녀는', '그가', '그녀가']
@@ -545,6 +479,14 @@ class AgentBrain:
         if re.search(r'(^|[\n\s])([^\s"“”]{2,20})(은|는|이|가)\s*', text):
             return True
         return False
+
+    def _split_rp_sections(self, text: str) -> tuple[str, str]:
+        cleaned = sanitize_assistant_text(text)
+        dialogue_chunks = [chunk.strip() for chunk in _DIALOGUE_RE.findall(cleaned) if chunk.strip()]
+        narration_text = _DIALOGUE_RE.sub('', cleaned)
+        narration_text = re.sub(r'\n{3,}', '\n\n', narration_text).strip()
+        dialogue_text = '\n'.join(dialogue_chunks).strip()
+        return narration_text, dialogue_text
 
     def _fallback_subject(self, active_character: Optional[Dict[str, Any]]) -> str:
         character_name = str((active_character or {}).get('name') or '').strip()

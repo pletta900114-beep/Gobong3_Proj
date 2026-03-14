@@ -915,15 +915,17 @@ def test_chat_ask_thinking_only_response_uses_final_answer_retry(tmp_path: Path)
     assert '서두르지 말자' not in body['response']
     assert len(llm.chat_calls) == 2
     assert llm.chat_call_options[0]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>', '</think>', '<think>']
-    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>']
+    assert llm.chat_call_options[0]['think'] is False
+    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>', '</think>', '<think>']
+    assert llm.chat_call_options[1]['options']['num_predict'] == 180
+    assert llm.chat_call_options[1]['think'] is False
 
 
-def test_chat_ask_thinking_only_retry_escalates_to_no_stop_when_needed(tmp_path: Path) -> None:
+def test_chat_ask_thinking_only_retry_stops_after_single_repair_then_fallback(tmp_path: Path) -> None:
     init_db()
     llm = RecordingLLM(response_payloads=[
         {"text": "", "thinking": "I should answer in character."},
         {"text": "", "thinking": "Still thinking."},
-        {"text": "선데이는 시선을 비껴 두었다가 조용히 다시 맞춘다.\n\n\"지금은 둘러대지 않을게. 그 말은 진심이야.\"", "thinking": ""},
     ])
     client = _build_runtime_client(tmp_path, llm)
     username = f'user_{uuid.uuid4().hex[:8]}'
@@ -945,10 +947,11 @@ def test_chat_ask_thinking_only_retry_escalates_to_no_stop_when_needed(tmp_path:
 
     assert response.status_code == 200
     body = response.json()
-    assert '"지금은 둘러대지 않을게. 그 말은 진심이야."' in body['response']
-    assert len(llm.chat_calls) == 3
-    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>']
-    assert llm.chat_call_options[2]['options'] == {}
+    assert body['rp_debug']['fallback_used'] is True
+    assert body['rp_debug']['final_verdict'] == 'FAIL'
+    assert len(llm.chat_calls) == 2
+    assert llm.chat_call_options[1]['options']['num_predict'] == 180
+    assert llm.chat_call_options[1]['think'] is False
 
 
 def test_chat_ask_repairs_english_drift_in_korean_session(tmp_path: Path) -> None:
@@ -987,7 +990,6 @@ def test_retry_path_repairs_english_drift_in_korean_session(tmp_path: Path) -> N
     init_db()
     llm = RecordingLLM(response_payloads=[
         {"text": "", "thinking": "I should answer in character."},
-        {"text": "He lowers his gaze for a beat.\n\n\"Yes. I mean it.\"", "thinking": ""},
         {"text": "선데이는 시선을 잠시 내렸다가 다시 들어 올린다.\n\n\"그래. 그 말은 진심이야.\"", "thinking": ""},
     ])
     client = _build_runtime_client(tmp_path, llm)
@@ -1012,10 +1014,8 @@ def test_retry_path_repairs_english_drift_in_korean_session(tmp_path: Path) -> N
     body = response.json()
     assert '선데이는' in body['response']
     assert '"그래. 그 말은 진심이야."' in body['response']
-    assert 'He lowers his gaze for a beat.' not in body['response']
-    assert len(llm.chat_calls) == 3
-    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>']
-    assert llm.chat_call_options[2]['options'] == {}
+    assert len(llm.chat_calls) == 2
+    assert llm.chat_call_options[1]['options']['stop'] == ['<|im_start|>', '<|im_end|>', '<|endoftext|>', '</think>', '<think>']
 
 
 def test_validate_rp_output_rejects_first_person_narration() -> None:
@@ -1173,3 +1173,97 @@ def test_rp_qa_report_json_and_markdown_share_final_verdict() -> None:
     assert '- final_verdict: FAIL' in markdown
     assert 'generated_at' in markdown
     assert 'run_id' in markdown
+
+
+def test_character_prompt_includes_style_and_franchise_anchors(tmp_path: Path) -> None:
+    init_db()
+    llm = RecordingLLM()
+    client = _build_runtime_client(tmp_path, llm)
+    username = f'user_{uuid.uuid4().hex[:8]}'
+
+    response = client.post(
+        '/chat/ask',
+        json={
+            'question': '선데이, 그 말 진심이야?',
+            'stream': False,
+            'mode': 'fast',
+            'user_profile_id': 'user_char_01',
+            'character_id': 'bot_char_02',
+            'scene_id': 'scene_default',
+            'world_id': 'default',
+        },
+        headers={'x-user': username},
+    )
+
+    assert response.status_code == 200
+    system_prompt = llm.chat_calls[-1][0]['content']
+    assert '표기 앵커:' in system_prompt
+    assert '스타일 앵커:' in system_prompt
+    assert '프랜차이즈 앵커:' in system_prompt
+    assert 'Arknights' in system_prompt or 'Genshin' in system_prompt
+
+
+def test_sanitize_assistant_text_salvages_json_and_tokens() -> None:
+    contaminated = '```json\n{"action": "선데이는 숨을 고른다.", "dialogue": "그래. 그 말은 진심이야."}\n```<|endoftext|><|im_start|>user'
+
+    cleaned = sanitize_assistant_text(contaminated)
+
+    assert cleaned == '선데이는 숨을 고른다.\n\n"그래. 그 말은 진심이야."'
+
+
+def test_validate_rp_output_rejects_naege_and_uri_in_narration() -> None:
+    brain = AgentBrain(llm_service=None, lookup_dispatcher=None)
+
+    ok, reasons = brain._validate_rp_output(
+        '선데이는 내게 시선을 두고 잠시 침묵했다.\n\n"그래."',
+        active_character={'name': '선데이'},
+        expected_language='ko',
+    )
+    assert not ok
+    assert 'narration_not_third_person' in reasons
+
+    ok, reasons = brain._validate_rp_output(
+        '어벤츄린은 우리를 훑어보듯 미소 지었다.\n\n"흥미로운 판이네."',
+        active_character={'name': '어벤츄린'},
+        expected_language='ko',
+    )
+    assert not ok
+    assert 'narration_not_third_person' in reasons
+
+
+def test_fallback_output_is_character_aware() -> None:
+    brain = AgentBrain(llm_service=None, lookup_dispatcher=None)
+
+    sunday = brain._fallback_rp_output({'name': 'Sunday'})
+    aventurine = brain._fallback_rp_output({'name': 'Aventurine'})
+
+    assert '선데이는' in sunday
+    assert '책임 있게 답하겠습니다' in sunday
+    assert '어벤츄린은' in aventurine
+    assert '이번 수는 끝까지 계산해 보자' in aventurine
+
+
+def test_validate_rp_output_bans_first_person_only_in_narration() -> None:
+    brain = AgentBrain(llm_service=None, lookup_dispatcher=None)
+
+    ok, reasons = brain._validate_rp_output(
+        '선데이는 내 시선을 마주하며 잠시 숨을 골랐다.\n\n"그래. 내가 그렇게 말한 이유는 분명해."',
+        active_character={'name': '선데이'},
+        expected_language='ko',
+    )
+
+    assert not ok
+    assert 'narration_not_third_person' in reasons
+
+
+def test_validate_rp_output_allows_first_person_in_dialogue() -> None:
+    brain = AgentBrain(llm_service=None, lookup_dispatcher=None)
+
+    ok, reasons = brain._validate_rp_output(
+        '선데이는 상대를 가만히 바라보며 말을 고른다.\n\n"내가 그렇게 말한 이유는 분명해. 우리 둘 다 이미 알고 있잖아."',
+        active_character={'name': '선데이'},
+        expected_language='ko',
+    )
+
+    assert ok
+    assert reasons == []

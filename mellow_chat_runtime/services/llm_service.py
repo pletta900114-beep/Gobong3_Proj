@@ -179,10 +179,14 @@ class LLMService:
         self._status = LLMStatus.GENERATING
         try:
             assert self._session is not None
-            async with self._session.post(f"{self._base_url}/api/chat", json=payload) as resp:
-                if resp.status != 200:
-                    raise LLMServiceError(await resp.text())
-                data = await resp.json()
+            try:
+                async with self._session.post(f"{self._base_url}/api/chat", json=payload) as resp:
+                    if resp.status != 200:
+                        raise LLMServiceError(await resp.text())
+                    data = await resp.json()
+            except (asyncio.TimeoutError, aiohttp.ServerTimeoutError) as exc:
+                logger.warning("llm.chat.timeout model=%s", use_model)
+                raise LLMServiceError("LLM request timed out") from exc
             message = data.get("message", {})
             text = message.get("content") or ""
             thinking = message.get("thinking") or ""

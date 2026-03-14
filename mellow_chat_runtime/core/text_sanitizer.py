@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 from typing import List
 
 STOP_SEQUENCES: List[str] = [
@@ -13,6 +14,7 @@ STOP_SEQUENCES: List[str] = [
 
 _THINK_BLOCK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 _SPECIAL_TOKEN_RE = re.compile(r'<\|im_start\|>|<\|im_end\|>|<\|endoftext\|>', re.IGNORECASE)
+_FENCED_BLOCK_RE = re.compile(r"```(?:json|text|markdown)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _ROLE_LINE_RE = re.compile(r'^(assistant|user|system)\s*:?\s*$', re.IGNORECASE)
 _META_PREFIXES = (
     '**Constraints Checklist',
@@ -51,7 +53,10 @@ def sanitize_assistant_text(text: str) -> str:
         return ''
 
     cleaned = _THINK_BLOCK_RE.sub('', cleaned)
-    cleaned = _SPECIAL_TOKEN_RE.split(cleaned)[0].strip()
+    cleaned = _SPECIAL_TOKEN_RE.sub('', cleaned).strip()
+    cleaned = _unwrap_fenced_blocks(cleaned)
+    cleaned = _salvage_structured_rp(cleaned)
+    cleaned = _extract_last_rp_block(cleaned)
 
     lines = [line.rstrip() for line in cleaned.splitlines()]
     kept: List[str] = []
@@ -67,6 +72,7 @@ def sanitize_assistant_text(text: str) -> str:
         kept.append(line)
 
     cleaned = '\n'.join(kept).strip()
+    cleaned = _SPECIAL_TOKEN_RE.sub('', cleaned).strip()
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
 
@@ -102,3 +108,75 @@ def _normalize_text(text: str) -> str:
     cleaned = (text or '').replace('\r\n', '\n').replace('\r', '\n').strip()
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
+
+
+def _unwrap_fenced_blocks(text: str) -> str:
+    match = _FENCED_BLOCK_RE.search(text or '')
+    if not match:
+        return text
+    inner = match.group(1).strip()
+    if inner:
+        return inner
+    return _FENCED_BLOCK_RE.sub('', text or '').strip()
+
+
+def _salvage_structured_rp(text: str) -> str:
+    candidate = (text or '').strip()
+    if not candidate:
+        return ''
+    if not candidate.startswith(('{', '[')):
+        return candidate
+    try:
+        data = json.loads(candidate)
+    except Exception:
+        return candidate
+    rp_text = _structured_to_rp(data)
+    return rp_text or candidate
+
+
+def _structured_to_rp(data: object) -> str:
+    if isinstance(data, list):
+        for item in reversed(data):
+            rp_text = _structured_to_rp(item)
+            if rp_text:
+                return rp_text
+        return ''
+    if not isinstance(data, dict):
+        return ''
+
+    narration = str(
+        data.get('narration')
+        or data.get('action')
+        or data.get('scene')
+        or ''
+    ).strip()
+    dialogue = str(
+        data.get('dialogue')
+        or data.get('speech')
+        or data.get('line')
+        or ''
+    ).strip()
+    if not narration and not dialogue:
+        return ''
+    if dialogue and not re.match(r'^[\"“].*[\"”]$', dialogue, re.DOTALL):
+        dialogue = f'"{dialogue}"'
+    if narration and dialogue:
+        return f'{narration}\n\n{dialogue}'
+    return narration or dialogue
+
+
+def _extract_last_rp_block(text: str) -> str:
+    cleaned = (text or '').strip()
+    if not cleaned:
+        return ''
+    quote_positions = [m.start() for m in re.finditer(r'[\"“]', cleaned)]
+    if not quote_positions:
+        return cleaned
+    last_quote = quote_positions[-1]
+    narration_start = cleaned.rfind('\n\n', 0, last_quote)
+    if narration_start == -1:
+        candidate = cleaned[:].strip()
+    else:
+        prev_break = cleaned.rfind('\n\n', 0, narration_start)
+        candidate = cleaned[(prev_break + 2 if prev_break != -1 else 0):].strip()
+    return candidate or cleaned

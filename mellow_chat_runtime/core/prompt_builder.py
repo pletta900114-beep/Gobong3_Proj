@@ -40,6 +40,10 @@ def build_system_prompt(
         boundary_text = ', '.join(str(boundary).strip() for boundary in boundaries if str(boundary).strip()) or 'none'
         relationship_lines.append(f'- {target_id}: {summary} | tone={rel_tone} | boundaries={boundary_text}')
     relationship_block = '\n'.join(relationship_lines) if relationship_lines else '- none'
+    aliases = active_character.get('aliases', []) if isinstance(active_character.get('aliases'), list) else []
+    alias_text = ', '.join(str(alias).strip() for alias in aliases if str(alias).strip()) or '(없음)'
+    style_anchor = str(active_character.get('style_anchor') or '').strip()
+    franchise_anchor = str(active_character.get('franchise_anchor') or '').strip()
     return (
         f'당신은 {character_name}이다.\n\n'
         '역할:\n'
@@ -59,6 +63,9 @@ def build_system_prompt(
         '- 제공된 세계관 정보와 모순되지 않게 답한다\n'
         '- 설명보다 행동과 대사를 우선한다\n'
         '- 메타 발화나 4벽 깨기를 하지 않는다\n'
+        '- 응답 본문은 반드시 message.content에 들어갈 최종 RP 답변만 작성한다\n'
+        '- 분석, 사고과정, 계획, 초안, 체크리스트를 출력하지 않는다\n'
+        '- 빈 응답이나 생략 기호만 출력하지 않는다\n'
         '- 선택된 캐릭터를 3인칭 서술로 묘사한다\n'
         '- 사용자 입력의 주 언어와 같은 언어로 답한다\n'
         '- 사용자 입력이 한국어이면 서술과 대사를 모두 한국어로 유지하고 영어로 전환하지 않는다\n\n'
@@ -70,8 +77,11 @@ def build_system_prompt(
         '금지 요소:\n'
         f'{forbidden_text}\n\n'
         '정체성 맥락:\n'
+        f'표기 앵커: 이름={character_name}, 별칭={alias_text}\n'
         f'관계 키: {relationship_text}\n'
         f'페르소나: {persona_desc}\n'
+        f'스타일 앵커: {style_anchor or "(없음)"}\n'
+        f'프랜차이즈 앵커: {franchise_anchor or "(없음)"}\n'
         f'대화 정책: {priority_rules}\n\n'
         '관계 맥락:\n'
         f'{relationship_block}\n\n'
@@ -80,6 +90,7 @@ def build_system_prompt(
         '- 답변 설명, 지시문 언급, 분석, 계획, 체크리스트, 역할 태그를 쓰지 않는다\n'
         '- <|im_start|>, <|im_end|>, <|endoftext|>, <think> 같은 토큰을 출력하지 않는다\n'
         '- assistant 식 메타 문장을 쓰지 않는다\n'
+        '- 추측으로 다른 작품이나 다른 캐릭터 정체성을 섞지 않는다\n'
         '- 끝까지 캐릭터를 유지한다\n\n'
         '아래에 대화 맥락과 기억 정보가 이어진다.\n'
         '도메인 데이터가 주어졌다면 외부 사실을 임의로 지어내지 않는다.'
@@ -139,6 +150,8 @@ def build_user_prompt(
         f'- 응답 주 언어: {language_label}\n'
         '- 사용자 입력의 주 언어와 같은 언어를 유지한다\n'
         '- 한국어 입력이면 서술과 대사를 모두 한국어로 유지하고 영어로 전환하지 않는다\n'
+        '- message.content에는 최종 RP 답변만 넣고 분석/계획/생각을 쓰지 않는다\n'
+        '- 빈 응답을 반환하지 않는다\n'
         f'- 서술은 선택된 캐릭터를 3인칭으로 묘사한다\n\n'
         '우선 맥락:\n'
         f'장면 우선: {json.dumps(scene_state, ensure_ascii=False)}\n'

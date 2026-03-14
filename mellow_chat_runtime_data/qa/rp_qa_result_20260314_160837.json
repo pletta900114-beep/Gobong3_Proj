@@ -1,0 +1,124 @@
+{
+  "generated_at": "2026-03-14T16:08:37",
+  "run_id": "20260314_160837",
+  "summary": {
+    "total": 5,
+    "passed": 0,
+    "failed": 5,
+    "retry_used": 5,
+    "fallback_used": 5,
+    "english_drift_detected": 0
+  },
+  "results": [
+    {
+      "generated_at": "2026-03-14T15:52:22",
+      "run_id": "run_20260314_155222_01",
+      "name": "sunday_sincerity",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "thinking_only_empty_content,retry_empty_or_invalid",
+      "speaker_id": "bot_char_02",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": true,
+      "retry_used": true,
+      "processing_time_ms": 199336,
+      "reasons": [
+        "thinking_only_empty_content,retry_empty_or_invalid"
+      ],
+      "response_preview": "선데이는 숨을 고른 뒤 흔들림 없는 시선으로 상대를 바라본다.\\n\\n\"지금 드린 말은 가볍게 꺼낸 것이 아닙니다. 이 장면에서는 차분히, 끝까지 책임 있게 답하겠습니다.\""
+    },
+    {
+      "generated_at": "2026-03-14T15:55:41",
+      "run_id": "run_20260314_155541_02",
+      "name": "aventurine_bet",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "thinking_only_empty_content,retry_empty_or_invalid",
+      "speaker_id": "bot_char_01",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": true,
+      "retry_used": true,
+      "processing_time_ms": 253363,
+      "reasons": [
+        "thinking_only_empty_content,retry_empty_or_invalid"
+      ],
+      "response_preview": "어벤츄린은 한쪽 입꼬리를 옅게 올린 채 판을 다시 가늠하듯 상대를 바라본다.\\n\\n\"성급하게 판을 접을 생각은 없어. 네 판단도 포함해서, 이번 수는 끝까지 계산해 보자.\""
+    },
+    {
+      "generated_at": "2026-03-14T15:59:54",
+      "run_id": "run_20260314_155954_03",
+      "name": "sunday_no_evasion",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "thinking_only_empty_content,retry_empty_or_invalid",
+      "speaker_id": "bot_char_02",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": true,
+      "retry_used": true,
+      "processing_time_ms": 103571,
+      "reasons": [
+        "thinking_only_empty_content,retry_empty_or_invalid"
+      ],
+      "response_preview": "선데이는 숨을 고른 뒤 흔들림 없는 시선으로 상대를 바라본다.\\n\\n\"지금 드린 말은 가볍게 꺼낸 것이 아닙니다. 이 장면에서는 차분히, 끝까지 책임 있게 답하겠습니다.\""
+    },
+    {
+      "generated_at": "2026-03-14T16:01:38",
+      "run_id": "run_20260314_160138_04",
+      "name": "narration_only_sunday",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "thinking_only_empty_content,retry_empty_or_invalid",
+      "speaker_id": "bot_char_02",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": true,
+      "retry_used": true,
+      "processing_time_ms": 210987,
+      "reasons": [
+        "thinking_only_empty_content,retry_empty_or_invalid"
+      ],
+      "response_preview": "선데이는 숨을 고른 뒤 흔들림 없는 시선으로 상대를 바라본다.\\n\\n\"지금 드린 말은 가볍게 꺼낸 것이 아닙니다. 이 장면에서는 차분히, 끝까지 책임 있게 답하겠습니다.\""
+    },
+    {
+      "generated_at": "2026-03-14T16:05:09",
+      "run_id": "run_20260314_160509_05",
+      "name": "mixed_korean_tension",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "thinking_only_empty_content,retry_empty_or_invalid",
+      "speaker_id": "bot_char_01",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": true,
+      "retry_used": true,
+      "processing_time_ms": 207722,
+      "reasons": [
+        "thinking_only_empty_content,retry_empty_or_invalid"
+      ],
+      "response_preview": "어벤츄린은 한쪽 입꼬리를 옅게 올린 채 판을 다시 가늠하듯 상대를 바라본다.\\n\\n\"성급하게 판을 접을 생각은 없어. 네 판단도 포함해서, 이번 수는 끝까지 계산해 보자.\""
+    }
+  ]
+}

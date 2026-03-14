@@ -1,0 +1,120 @@
+{
+  "generated_at": "2026-03-14T15:39:37",
+  "run_id": "20260314_153937",
+  "summary": {
+    "total": 5,
+    "passed": 2,
+    "failed": 3,
+    "retry_used": 4,
+    "fallback_used": 2,
+    "english_drift_detected": 0
+  },
+  "results": [
+    {
+      "generated_at": "2026-03-14T15:31:44",
+      "run_id": "run_20260314_153144_01",
+      "name": "sunday_sincerity",
+      "ok": true,
+      "validator_passed": true,
+      "final_verdict": "PASS",
+      "failure_reason": "",
+      "speaker_id": "bot_char_02",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": false,
+      "retry_used": true,
+      "processing_time_ms": 114428,
+      "reasons": [],
+      "response_preview": "선데이는 침묵을 지키며 사용자의 눈을 마주치고 고개를 약간 기울었다. 차분한 표정으로 입가를 움직이며 목소리는 낮고 안정적이었으나 믿음이 담긴 확신을 잃지 않았다.\\n\\n\"네, 그건 내 입장에서 변하지 않는 진실입니..."
+    },
+    {
+      "generated_at": "2026-03-14T15:33:38",
+      "run_id": "run_20260314_153338_02",
+      "name": "aventurine_bet",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "http_500",
+      "speaker_id": "",
+      "input_language": "ko",
+      "output_language": "unknown",
+      "quoted_dialogue": false,
+      "third_person": false,
+      "english_drift": false,
+      "fallback_used": false,
+      "retry_used": false,
+      "processing_time_ms": 0,
+      "reasons": [
+        "http_500"
+      ],
+      "response_preview": "{\"error\":\"generation_failed\",\"message\":\"Chat request failed\",\"request_id\":\"chat_73aed8cdb1\"}"
+    },
+    {
+      "generated_at": "2026-03-14T15:36:39",
+      "run_id": "run_20260314_153639_03",
+      "name": "sunday_no_evasion",
+      "ok": true,
+      "validator_passed": true,
+      "final_verdict": "PASS",
+      "failure_reason": "",
+      "speaker_id": "bot_char_02",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": false,
+      "retry_used": true,
+      "processing_time_ms": 65116,
+      "reasons": [],
+      "response_preview": "선두이는 고개를 들어 사용자가 건넨 말을 차분히 들은 뒤, 잠시 멈춰 서서 내딛는 발걸음을 확고하게 한다. 피하지 말라는 그 요청을 경중을 가며 받아들인 채, 진지한 눈빛으로 응시하며 과거의 회피를 거부하는 태도를 ..."
+    },
+    {
+      "generated_at": "2026-03-14T15:37:44",
+      "run_id": "run_20260314_153744_04",
+      "name": "narration_only_sunday",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "thinking_only_empty_content,retry_empty_or_invalid",
+      "speaker_id": "bot_char_02",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": true,
+      "retry_used": true,
+      "processing_time_ms": 41086,
+      "reasons": [
+        "thinking_only_empty_content,retry_empty_or_invalid"
+      ],
+      "response_preview": "그는 잠시 숨을 고르며 상대의 눈을 똑바로 바라본다.\\n\\n\"지금은 서두르지 말자. 이 장면 안에서 차분히 이어가면 돼.\""
+    },
+    {
+      "generated_at": "2026-03-14T15:38:25",
+      "run_id": "run_20260314_153825_05",
+      "name": "mixed_korean_tension",
+      "ok": false,
+      "validator_passed": false,
+      "final_verdict": "FAIL",
+      "failure_reason": "thinking_only_empty_content,retry_empty_or_invalid",
+      "speaker_id": "bot_char_01",
+      "input_language": "ko",
+      "output_language": "ko",
+      "quoted_dialogue": true,
+      "third_person": true,
+      "english_drift": false,
+      "fallback_used": true,
+      "retry_used": true,
+      "processing_time_ms": 71628,
+      "reasons": [
+        "thinking_only_empty_content,retry_empty_or_invalid"
+      ],
+      "response_preview": "그는 잠시 숨을 고르며 상대의 눈을 똑바로 바라본다.\\n\\n\"지금은 서두르지 말자. 이 장면 안에서 차분히 이어가면 돼.\""
+    }
+  ]
+}
